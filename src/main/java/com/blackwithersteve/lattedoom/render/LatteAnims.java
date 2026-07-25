@@ -75,8 +75,10 @@ public final class LatteAnims {
                 defs = parsed.toArray(new Def[0]);
             }
         }
+        final List<String> walls = lastWins(orderedWalls);
+        final List<String> flats = lastWins(orderedFlats);
         for (Def d : defs) {
-            final List<String> order = d.wall() ? orderedWalls : orderedFlats;
+            final List<String> order = d.wall() ? walls : flats;
             final String prefix = d.wall() ? "walls/" : "flats/";
             final int a = order.indexOf(d.first());
             final int b = order.indexOf(d.last());
@@ -91,6 +93,25 @@ public final class LatteAnims {
                 MEMBERS.put(seq[i], new Member(seq, i, d.speed()));
             }
         }
+    }
+
+    /**
+     * The directory as {@code W_CheckNumForName} resolves it: that search runs backward, so
+     * a name defined in more than one WAD resolves to the last definition, and a sequence
+     * range has to be measured over that same view. A patch WAD extends a vanilla animation
+     * by inserting its own frames between the first and last vanilla names, for example
+     * {@code FWATER1, FWATER02..FWATER31, FWATER4}. Measured inside that WAD's own block the
+     * range is 32 frames; measured over the base WAD's copies it collapses to four, two of
+     * which the patch never replaced, so the animation alternates between the patch's art
+     * and the base game's.
+     */
+    private static List<String> lastWins(List<String> order) {
+        final java.util.LinkedHashSet<String> seen = new java.util.LinkedHashSet<>();
+        for (String n : order) {
+            seen.remove(n); // a later definition takes the earlier one's place
+            seen.add(n);
+        }
+        return new java.util.ArrayList<>(seen);
     }
 
     /** The texture key to bind for this key at the given engine tic; returns the key

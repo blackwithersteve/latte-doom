@@ -153,7 +153,24 @@ public final class LatteWorldRenderer {
      */
     private static void submitSky(PoseStack pose, SubmitNodeCollector collector, Vec3 cam) {
         final var snap = LatteWorld.snap();
-        final String sky = snap != null ? snap.skyTexture : null;
+        String sky = snap != null ? snap.skyTexture : null;
+        // Boom sky transfer (specials 271 and 272) gives tagged sectors their own sky. The
+        // sky is one camera-centred cylinder, so the sector the camera stands in selects it.
+        // That is exact everywhere except a vantage point showing two sky regions at once,
+        // which needs a per-opening pass to resolve.
+        boolean flip = false;
+        int xofs = 0;
+        final DoomMap map = LatteWorld.map();
+        if (map != null && map.hasSkyTransfers()) {
+            final int camSec = map.sectorAt(
+                LatteWorld.worldToDoomX(cam.x), LatteWorld.worldToDoomY(cam.z));
+            final String transferred = map.skyTextureFor(camSec);
+            if (transferred != null) {
+                sky = transferred;
+                flip = map.skyFlippedFor(camSec);
+                xofs = map.skyXOffsetFor(camSec);
+            }
+        }
         if (sky == null) {
             return;
         }
@@ -188,8 +205,15 @@ public final class LatteWorldRenderer {
             final double c0 = Math.cos(a0), s0 = -Math.sin(a0);
             final double c1 = Math.cos(a1), s1 = -Math.sin(a1);
             final double span = repeats / segs;
-            final float u0 = (float) ((i * span) % 1.0);
-            final float u1 = (float) (u0 + span);
+            final double shift = xofs / (double) size[0];
+            float u0 = (float) ((i * span + shift) % 1.0);
+            float u1 = (float) (u0 + span);
+            if (flip) {
+                // Special 272 mirrors the sky: reverse the column direction across the quad.
+                final float t = u0;
+                u0 = -u1;
+                u1 = -t;
+            }
             // Three bands: the zenith cap with the top row stretched, the mapped sky,
             // and the nadir cap.
             quads.add(band(bx, by, bz, radius, c0, s0, c1, s1,

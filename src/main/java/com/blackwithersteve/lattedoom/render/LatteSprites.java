@@ -62,14 +62,8 @@ public final class LatteSprites {
 
     private static final Map<String, Identifier> IDS = new HashMap<>();
 
-    // ---- Interpolation: object positions are blended between the last two engine tics
-    // so that motion is smooth at any frame rate. ----
-    private static int lastTic = -1;
-    private static Map<Integer, double[]> prevPos = new HashMap<>();
-    private static Map<Integer, double[]> curPos = new HashMap<>();
-    /** One tic at top speed covers about 30 map units, so a larger step is a teleport or
-     * respawn and must snap rather than interpolate. */
-    private static final double TELEPORT_SNAP = 128.0;
+    /** Scratch for the drawn-position lookup; the client thread is the only caller. */
+    private static final double[] drawn = new double[3];
 
     /** Called inside the renderer's origin-translated pose, with the camera position in
      * world coordinates. */
@@ -80,15 +74,8 @@ public final class LatteSprites {
         if (snap == null || sprites == null) {
             return;
         }
-        if (snap.tic != lastTic) { // new engine tic: the current keyframe becomes previous
-            prevPos = curPos;
-            curPos = new HashMap<>(snap.mobjCount * 2);
-            for (int i = 0; i < snap.mobjCount; i++) {
-                curPos.put(snap.mId[i], new double[]{snap.mx[i], snap.my[i], snap.mz[i]});
-            }
-            lastTic = snap.tic;
-        }
-        final double alpha = LatteWorld.alpha(); // the same clock the moving sectors use
+        // Positions come from LatteWorld's keyframe table, which the thing collision reads
+        // as well, so a monster is drawn exactly where its blocking box is.
 
         // The camera in map space, used for view selection and billboard facing.
         final double camDx = (camWorldX - originX) * UNITS + cx;
@@ -118,13 +105,8 @@ public final class LatteSprites {
             if (sprName == null) {
                 continue;
             }
-            double mx = snap.mx[i], my = snap.my[i], mz = snap.mz[i];
-            final double[] p0 = prevPos.get(snap.mId[i]);
-            if (p0 != null && Math.abs(p0[0] - mx) + Math.abs(p0[1] - my) < TELEPORT_SNAP) {
-                mx = p0[0] + (mx - p0[0]) * alpha;
-                my = p0[1] + (my - p0[1]) * alpha;
-                mz = p0[2] + (mz - p0[2]) * alpha;
-            }
+            LatteWorld.thingDrawn(snap, i, drawn);
+            final double mx = drawn[0], my = drawn[1], mz = drawn[2];
             final double vdx = mx - camDx, vdy = my - camDy;
             final double dist = Math.hypot(vdx, vdy);
             if (dist < 1.0e-3) {

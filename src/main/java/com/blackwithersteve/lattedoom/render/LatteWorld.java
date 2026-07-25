@@ -1044,12 +1044,14 @@ public final class LatteWorld {
             if (haveOwn && s.mId[i] == ownBody) {
                 continue;
             }
+            thingDrawn(s, i, thingScratch);
+            final double tx = thingScratch[0], ty = thingScratch[1];
             final double bd = s.mRadius[i] + 16.0; // blockmap rule (Chebyshev)
-            final double dTo = Math.max(Math.abs(s.mx[i] - toX), Math.abs(s.my[i] - toY));
+            final double dTo = Math.max(Math.abs(tx - toX), Math.abs(ty - toY));
             if (dTo >= bd) {
                 continue; // destination clears this thing entirely
             }
-            final double dFrom = Math.max(Math.abs(s.mx[i] - fromX), Math.abs(s.my[i] - fromY));
+            final double dFrom = Math.max(Math.abs(tx - fromX), Math.abs(ty - fromY));
             if (dTo < dFrom - 1.0e-4) {
                 return true; // moving deeper into it: block (but sliding/backing out is fine)
             }
@@ -1086,8 +1088,9 @@ public final class LatteWorld {
             if (haveOwn && s.mId[i] == ownBody) {
                 continue; // this player's own remote body
             }
+            thingDrawn(s, i, thingScratch);
             final double bd = s.mRadius[i] + margin; // blockmap rule: radius sum, Chebyshev
-            if (Math.abs(s.mx[i] - px) < bd && Math.abs(s.my[i] - py) < bd) {
+            if (Math.abs(thingScratch[0] - px) < bd && Math.abs(thingScratch[1] - py) < bd) {
                 return true;
             }
         }
@@ -1728,6 +1731,52 @@ public final class LatteWorld {
      * keyframe, the discrete cache re-bakes (collision-truth heights), and the wall clock
      * marks the tic's arrival so {@link #alpha()} can interpolate the glide between them.
      */
+    // Object-position keyframes, the same prev -> cur pair the sector heights use. The
+    // sprite pass and the thing collision both read the interpolated value, so a monster's
+    // blocking box sits where its body is drawn. Testing the newest snapshot instead puts
+    // the box the full render latency ahead of the sprite, which stops the player short of
+    // a moving monster by up to a block.
+    private static int thingTic = -1;
+    private static Map<Integer, double[]> prevThing = new HashMap<>();
+    private static Map<Integer, double[]> curThing = new HashMap<>();
+    /** One tic at top speed covers about 30 map units, so a larger step is a teleport or a
+     * respawn and snaps rather than interpolating. */
+    private static final double THING_SNAP = 128.0;
+    /** Scratch for {@link #thingDrawn}; the client thread is the only caller. */
+    private static final double[] thingScratch = new double[3];
+
+    private static void rollThingKeyframes(
+            com.blackwithersteve.lattedoom.engine.WorldSnapshot s) {
+        if (s.tic == thingTic) {
+            return;
+        }
+        prevThing = curThing;
+        curThing = new HashMap<>(Math.max(16, s.mobjCount * 2));
+        for (int i = 0; i < s.mobjCount; i++) {
+            curThing.put(s.mId[i], new double[]{s.mx[i], s.my[i], s.mz[i]});
+        }
+        thingTic = s.tic;
+    }
+
+    /** The drawn position of snapshot object {@code i}, written into {@code out} as
+     * {x, y, z} in map units. An object with no previous keyframe, and a step large enough
+     * to be a teleport, reports its current position unchanged. */
+    public static void thingDrawn(com.blackwithersteve.lattedoom.engine.WorldSnapshot s,
+                                  int i, double[] out) {
+        out[0] = s.mx[i];
+        out[1] = s.my[i];
+        out[2] = s.mz[i];
+        final double[] pv = prevThing.get(s.mId[i]);
+        if (pv == null
+            || Math.abs(pv[0] - out[0]) + Math.abs(pv[1] - out[1]) >= THING_SNAP) {
+            return;
+        }
+        final double a = alpha();
+        out[0] = pv[0] + (out[0] - pv[0]) * a;
+        out[1] = pv[1] + (out[1] - pv[1]) * a;
+        out[2] = pv[2] + (out[2] - pv[2]) * a;
+    }
+
     static void renderSync() {
         final com.blackwithersteve.lattedoom.engine.WorldSnapshot s = snap;
         if (s == null || map == null || groups == null) {
@@ -1748,6 +1797,7 @@ public final class LatteWorld {
             lastTic = s.tic;
             ticOfPrev2 = ticOfPrev = ticOfCur = s.tic; // degenerate until the first roll
             baseNanos = 0;                  // clock re-anchors on the next roll
+            rollThingKeyframes(s);
             return;
         }
         if (s.tic == lastTic) {
@@ -1762,6 +1812,7 @@ public final class LatteWorld {
         ticOfPrev2 = ticOfPrev;
         ticOfPrev = ticOfCur > 0 ? ticOfCur : lastTic;
         ticOfCur = s.tic;
+        rollThingKeyframes(s);
         for (int i = 0; i < n; i++) {
             prevFloor2[i] = prevFloor[i];
             prevCeil2[i] = prevCeil[i];

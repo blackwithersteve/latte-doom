@@ -120,6 +120,77 @@ public final class DoomMap {
     private int[] vertX, vertY;
     private List<SubPoly> polys;
 
+    // Boom sky transfer (linedef specials 271 and 272). The assignment is made once when a
+    // level spawns its specials and never changes, so it is resolved here from the map data
+    // rather than carried in the snapshot. Each entry holds the index of the transferring
+    // linedef, or -1 when the sector uses the map's own sky.
+    private int[] sectorSkyLine = new int[0];
+
+    /** Resolves specials 271 and 272 onto their tagged sectors. */
+    void buildSkyTransfers() {
+        sectorSkyLine = new int[sectors.size()];
+        java.util.Arrays.fill(sectorSkyLine, -1);
+        for (int li = 0; li < lines.size(); li++) {
+            final Line l = lines.get(li);
+            if (l.special() != 271 && l.special() != 272) {
+                continue;
+            }
+            // A tag of zero is meaningful here: P_FindSectorFromLineTag matches sectors
+            // whose tag is also zero, which is how a map sets one sky for everything it
+            // has not tagged otherwise.
+            for (int sec = 0; sec < sectorSkyLine.length; sec++) {
+                if (sectorTag(sec) == l.tag()) {
+                    sectorSkyLine[sec] = li;
+                }
+            }
+        }
+    }
+
+    private int skyLine(int sector) {
+        return sector >= 0 && sector < sectorSkyLine.length ? sectorSkyLine[sector] : -1;
+    }
+
+    /** The sky transferred onto this sector, or null for the map's own sky. Boom takes it
+     * from the upper texture of the transferring linedef's front sidedef. */
+    public String skyTextureFor(int sector) {
+        final int li = skyLine(sector);
+        if (li < 0) {
+            return null;
+        }
+        final int sd = lines.get(li).frontSide();
+        if (sd < 0 || sd >= sides.size()) {
+            return null;
+        }
+        final String up = sides.get(sd).upper();
+        return up == null || up.isEmpty() || "-".equals(up) ? null : up;
+    }
+
+    /** Whether this sector's transferred sky is mirrored: special 272 rather than 271. */
+    public boolean skyFlippedFor(int sector) {
+        final int li = skyLine(sector);
+        return li >= 0 && lines.get(li).special() == 272;
+    }
+
+    /** The transferring sidedef's horizontal offset, applied as a sky column shift. */
+    public int skyXOffsetFor(int sector) {
+        final int li = skyLine(sector);
+        if (li < 0) {
+            return 0;
+        }
+        final int sd = lines.get(li).frontSide();
+        return sd >= 0 && sd < sides.size() ? sides.get(sd).xofs() : 0;
+    }
+
+    /** Whether any sector in this map carries a transferred sky. */
+    public boolean hasSkyTransfers() {
+        for (int v : sectorSkyLine) {
+            if (v >= 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public int sectorTag(int sector) {
         return sector >= 0 && sector < sectorTags.length ? sectorTags[sector] : 0;
     }
@@ -298,6 +369,7 @@ public final class DoomMap {
             map.things.add(new Thing(th.getShort(), th.getShort(),
                 th.getShort(), th.getShort() & 0xFFFF, th.getShort() & 0xFFFF));
         }
+        map.buildSkyTransfers(); // needs the linedefs and sidedefs, so it runs last
         return map;
     }
 
