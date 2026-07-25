@@ -492,8 +492,15 @@ public final class DoomHost {
                         d.actions.UnsetThingPosition(mo);
                         mo.x = (int) (mirrorX * 65536.0);
                         mo.y = (int) (mirrorY * 65536.0);
-                        mo.z = (int) (mirrorZ * 65536.0);
                         d.actions.SetThingPosition(mo);
+                        // Refresh floorz and ceilingz for the new position. P_TryMove does
+                        // this and the mirror bypasses it, so without the call they keep the
+                        // value from wherever the engine last moved this object under its
+                        // own movement code. P_ZMovement then clamps the object to a floor
+                        // it is nowhere near, and everything that aims at it, including
+                        // P_SpawnMissile's vertical aim, uses that height.
+                        d.actions.ThingHeightClip(mo);
+                        mo.z = (int) (mirrorZ * 65536.0);
                         // Damage floors: the engine's sector-damage check compares the
                         // player's height against the floor height for exact equality in
                         // fixed point, and a height derived from Minecraft's floating-point
@@ -848,8 +855,9 @@ public final class DoomHost {
             d.actions.UnsetThingPosition(mo);
             mo.x = (int) (rb.x * 65536.0);
             mo.y = (int) (rb.y * 65536.0);
-            mo.z = (int) (rb.z * 65536.0);
             d.actions.SetThingPosition(mo);
+            d.actions.ThingHeightClip(mo); // same floor refresh as the local mirror
+            mo.z = (int) (rb.z * 65536.0);
             mo.momx = mo.momy = mo.momz = 0;
             mo.angle = ((long) (rb.angleDeg / 360.0 * 4294967296.0)) & 0xFFFFFFFFL;
             d.players[idx].viewz = mo.z + data.Defines.VIEWHEIGHT;

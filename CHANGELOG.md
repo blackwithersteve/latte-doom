@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.37.0-alpha] - 2026-07-25
+
+### Fixed
+
+- Monsters aimed projectiles above or below the player. The mirrored player object kept the
+  floor height from wherever the engine last moved it, and the vertical clamp applied that
+  height every tic. Floor and ceiling are now refreshed whenever the mirror repositions a
+  player, local or remote.
+
 ## [0.35.0-alpha] - 2026-07-25
 
 ### Added
