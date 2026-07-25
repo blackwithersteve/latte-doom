@@ -1,0 +1,29 @@
+{
+	"required": true,
+	"package": "com.blackwithersteve.lattedoom.mixin",
+	"compatibilityLevel": "JAVA_21",
+	"mixins": [
+		"FallDamageMixin",
+		"ItemEntityMixin",
+		"MarineDeathMixin",
+		"MarineFoodMixin",
+		"PlayerHurtSoundMixin"
+	],
+	"client": [
+		"AvatarDimensionsMixin",
+		"AvatarSubmitMixin",
+		"DeathCameraMixin",
+		"DefaultSkinMixin",
+		"GameRendererBobMixin",
+		"HandRenderMixin",
+		"HudExtractMixin",
+		"HurtShakeMixin",
+		"KeyboardInputMixin",
+		"LevelRendererMixin",
+		"MarineAttackMixin",
+		"PlayerTravelMixin"
+	],
+	"injectors": {
+		"defaultRequire": 1
+	}
+}

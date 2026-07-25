@@ -1,0 +1,37 @@
+{
+	"schemaVersion": 1,
+	"id": "lattedoom",
+	"version": "${version}",
+	"name": "Latte Doom",
+	"description": "A DOOM source port for Minecraft. A vendored Mocha Doom engine runs inside Minecraft's JVM and owns all simulation (collision, monsters, line specials, RNG, the 35 Hz tic) while the level is rendered as walkable 3D geometry around the player. Requires your own DOOM or DOOM II IWAD; no game data is included.",
+	"authors": [
+		"blackwithersteve"
+	],
+	"contributors": [
+		"id Software (DOOM)",
+		"velktron / Maes (Mocha Doom)",
+		"Good Sign",
+		"AXDOOMER and contributors"
+	],
+	"contact": {
+		"homepage": "https://github.com/blackwithersteve/latte-doom",
+		"sources": "https://github.com/blackwithersteve/latte-doom",
+		"issues": "https://github.com/blackwithersteve/latte-doom/issues"
+	},
+	"license": "GPL-3.0-or-later",
+	"environment": "client",
+	"entrypoints": {
+		"client": [
+			"com.blackwithersteve.lattedoom.LatteDoomClient"
+		]
+	},
+	"mixins": [
+		"lattedoom.mixins.json"
+	],
+	"depends": {
+		"fabricloader": ">=0.19.3",
+		"minecraft": "~26.2",
+		"java": ">=25",
+		"fabric-api": "*"
+	}
+}

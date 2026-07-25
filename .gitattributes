@@ -1,0 +1,11 @@
+# Normalise line endings: LF in the repository for everything textual.
+* text=auto eol=lf
+
+# Windows batch files must keep CRLF to run correctly.
+*.bat text eol=crlf
+
+# Binaries must never be converted.
+*.jar binary
+*.png binary
+*.ogg binary
+*.wad binary

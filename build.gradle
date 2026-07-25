@@ -1,0 +1,127 @@
+plugins {
+	id 'net.fabricmc.fabric-loom' version "${loom_version}"
+}
+
+version = project.mod_version
+group = project.maven_group
+
+repositories {
+}
+
+dependencies {
+	minecraft "com.mojang:minecraft:${project.minecraft_version}"
+	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+}
+
+sourceSets {
+	main {
+		java {
+			// The vendored Mocha Doom engine (GPL) lives beside the mod sources.
+			srcDir 'src/mochadoom'
+		}
+	}
+}
+
+loom {
+	runs {
+		client {
+			programArgs("--username", "Steve")
+			// Offline usernames hash into one of nine default skins; pin the classic one.
+			vmArgs("-Dlattedoom.steveskin=true")
+		}
+		client2 {
+			client()
+			runDir "run2"
+			programArgs("--username", "Marine")
+			// Second local instance for LAN testing: a distinct window title keeps the two
+			// clients apart, and frustum culling is disabled here for A/B comparison.
+			vmArgs("-Dlattedoom.title=Latte Doom P2", "-Dlattedoom.steveskin=true",
+				"-Dlattedoom.cull=false")
+		}
+	}
+}
+
+processResources {
+	inputs.property "version", project.version
+
+	filesMatching("fabric.mod.json") {
+		expand "version": project.version
+	}
+}
+
+tasks.withType(JavaCompile).configureEach {
+	it.options.release = 25
+	it.options.encoding = 'UTF-8'
+	// The vendored engine predates most modern lints; compile errors still fail the build.
+	it.options.warnings = false
+}
+
+java {
+	sourceCompatibility = JavaVersion.VERSION_25
+	targetCompatibility = JavaVersion.VERSION_25
+}
+
+// The verification tasks below run against a WAD you supply. No game data ships with
+// this repository (see LEGAL.md), so pass your own IWAD path:
+//
+//     ./gradlew triProbe -Pwad=/path/to/DOOM.WAD [-Pmap=E1M1]
+//
+// doomSmoke reads its WAD from the DOOM_WAD environment variable, or from DOOM.WAD in
+// the run-smoke working directory.
+
+// Sector-triangulation gate: every map must triangulate watertight (see TriProbe).
+tasks.register('triProbe', JavaExec) {
+	group = 'verification'
+	description = 'Triangulate every map of a WAD; assert watertight sector geometry.'
+	classpath = sourceSets.main.runtimeClasspath
+	mainClass = 'com.blackwithersteve.lattedoom.harness.TriProbe'
+	args = [
+		(project.findProperty('wad') ?: '').toString(),
+		(project.findProperty('map') ?: '').toString()
+	]
+}
+
+// Player-collision gate: sprint from every P1 start in 8 directions (see MoveProbe).
+tasks.register('moveProbe', JavaExec) {
+	group = 'verification'
+	description = 'Walk every map headless with the DOOM collision port; assert containment.'
+	classpath = sourceSets.main.runtimeClasspath
+	mainClass = 'com.blackwithersteve.lattedoom.harness.MoveProbe'
+	args = [
+		(project.findProperty('wad') ?: '').toString(),
+		(project.findProperty('map') ?: '').toString()
+	]
+}
+
+// Boots the real engine without Minecraft and dumps PNG frames of the title demo.
+tasks.register('doomSmoke', JavaExec) {
+	group = 'verification'
+	description = 'Headless engine smoke test: boot an IWAD, dump frames as PNGs.'
+	classpath = sourceSets.main.runtimeClasspath
+	mainClass = 'com.blackwithersteve.lattedoom.harness.HeadlessSmoke'
+	workingDir = file('run-smoke')
+	doFirst { file('run-smoke').mkdirs() }
+	args = [(project.findProperty('wad') ?: '').toString()].findAll { !it.isEmpty() }
+}
+
+// Generates a synthetic arena WAD, boots the engine on it and verifies monster AI runs.
+tasks.register('arenaProbe', JavaExec) {
+	group = 'verification'
+	description = 'Boot the engine on a generated arena and verify a spawned monster thinks.'
+	classpath = sourceSets.main.runtimeClasspath
+	mainClass = 'com.blackwithersteve.lattedoom.harness.ArenaProbe'
+	workingDir = file('run-arena')
+	doFirst { file('run-arena').mkdirs() }
+	ignoreExitValue = true
+}
+
+// Parses and applies DEHACKED/BEX from a WAD or .deh file against the real engine
+// tables, without booting the engine: ./gradlew dehProbe -PdehFile=/path/to/patch.deh
+tasks.register('dehProbe', JavaExec) {
+	group = 'verification'
+	description = 'Parse and apply the DEHACKED/BEX lumps of a WAD or .deh file.'
+	classpath = sourceSets.main.runtimeClasspath
+	mainClass = 'com.blackwithersteve.lattedoom.harness.DehProbe'
+	args = [(project.findProperty('dehFile') ?: '').toString()].findAll { !it.isEmpty() }
+}

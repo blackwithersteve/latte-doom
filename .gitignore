@@ -1,0 +1,17 @@
+.gradle/
+build/
+run/
+run2/
+run-smoke/
+run-arena/
+.idea/
+*.iml
+.vscode/
+*.log
+
+# Game data is never committed: supply your own IWAD at runtime (see LEGAL.md).
+*.wad
+*.WAD
+*.deh
+*.lmp
+tranmap.dat
