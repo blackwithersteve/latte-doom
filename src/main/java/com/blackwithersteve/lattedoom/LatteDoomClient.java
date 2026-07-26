@@ -240,9 +240,14 @@ public class LatteDoomClient implements ClientModInitializer {
         // The two games name their maps differently, and typing the other game's format is
         // the commonest mistake. The WAD itself says which scheme applies, so say so and
         // offer the equivalent rather than warping somewhere the player did not ask for.
-        final boolean episodes = com.blackwithersteve.lattedoom.render.LatteWorld.hasEpisodes();
+        // A bare number is exempt: it is the engine's own warp argument and means the same
+        // thing in both schemes. The scheme itself is read from the configured WAD rather
+        // than from a level that happens to be raised, because asking the loaded level meant
+        // the first warp of a session defaulted to the DOOM 1 layout even with a DOOM II WAD.
+        final boolean bareNumber = want.matches("[0-9]{1,2}");
+        final boolean episodes = LatteDoomConfig.hasEpisodes(config.iwadPath);
         final boolean gaveEpisode = want.startsWith("e");
-        if (gaveEpisode != episodes) {
+        if (!bareNumber && gaveEpisode != episodes) {
             src.sendFeedback(Component.literal(episodes
                 ? "§cThis WAD uses §eE1M1§c style names.§r Try §e/warp e1m1§r."
                 : "§cThis WAD uses §eMAP01§c style names.§r Try §e/warp map01§r."));

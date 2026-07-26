@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.41.0-alpha] - 2026-07-26
+
+### Fixed
+
+- `/warp` reported the wrong map naming scheme. It read the scheme from a level that
+  happened to be raised, so before any level had loaded it defaulted to the DOOM 1 layout
+  and asked for `E1M1` even with a DOOM II WAD loaded. It now reads the configured WAD, and
+  a bare warp number such as `/warp 01` is accepted for either game.
+
 ## [0.40.0-alpha] - 2026-07-26
 
 ### Added

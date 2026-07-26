@@ -229,6 +229,41 @@ public final class LatteDoomConfig {
         return false;
     }
 
+    /**
+     * Whether this WAD names its maps ExMy rather than MAPxx. Read from the file's own
+     * directory, so it is answerable before anything has been loaded or a level raised.
+     */
+    public static boolean hasEpisodes(Path p) {
+        if (p == null) {
+            return false;
+        }
+        try (java.io.RandomAccessFile f = new java.io.RandomAccessFile(p.toFile(), "r")) {
+            final byte[] head = new byte[12];
+            f.readFully(head);
+            final java.nio.ByteBuffer hb = java.nio.ByteBuffer.wrap(head)
+                .order(java.nio.ByteOrder.LITTLE_ENDIAN);
+            hb.position(4);
+            final int num = hb.getInt();
+            final int dirOfs = hb.getInt();
+            if (num <= 0 || num > 65536 || dirOfs <= 0 || dirOfs >= f.length()) {
+                return false;
+            }
+            f.seek(dirOfs);
+            final byte[] dir = new byte[Math.min(num * 16, (int) (f.length() - dirOfs))];
+            f.readFully(dir);
+            for (int i = 0; i + 16 <= dir.length; i += 16) {
+                final int o = i + 8;
+                if (dir[o] == 'E' && dir[o + 1] >= '1' && dir[o + 1] <= '9'
+                    && dir[o + 2] == 'M' && dir[o + 3] >= '1' && dir[o + 3] <= '9') {
+                    return true;
+                }
+            }
+        } catch (Exception ignored) {
+            return false;
+        }
+        return false;
+    }
+
     /** An ExMy or MAPxx marker at this offset in the directory entry. */
     private static boolean isMapMarker(byte[] d, int o) {
         if (d[o] == 'E' && d[o + 1] >= '1' && d[o + 1] <= '9'
