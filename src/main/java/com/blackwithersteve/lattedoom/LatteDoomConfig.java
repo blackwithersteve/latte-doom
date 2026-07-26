@@ -230,6 +230,59 @@ public final class LatteDoomConfig {
     }
 
     /**
+     * The other id-engine games this port cannot run, identified by a lump only that game
+     * ships. They are structurally valid WADs with a palette and maps, so every test for a
+     * usable base WAD passes and the engine only fails later, on lumps that are not there.
+     * A negative test is used deliberately: an unknown game is worse handled than a DOOM
+     * total conversion is wrongly refused.
+     */
+    private static final String[][] FOREIGN_GAMES = {
+        {"VELLOGO", "Strife"},
+        {"RGELOGO", "Strife"},
+        {"M_HTIC", "Heretic"},
+        {"WINNOWR", "Hexen"},
+        {"TINTTAB", "Hexen"},
+    };
+
+    /** The name of the game this WAD belongs to when it is not DOOM, or null. */
+    public static String foreignGame(Path p) {
+        if (p == null) {
+            return null;
+        }
+        try (java.io.RandomAccessFile f = new java.io.RandomAccessFile(p.toFile(), "r")) {
+            final byte[] head = new byte[12];
+            f.readFully(head);
+            final java.nio.ByteBuffer hb = java.nio.ByteBuffer.wrap(head)
+                .order(java.nio.ByteOrder.LITTLE_ENDIAN);
+            hb.position(4);
+            final int num = hb.getInt();
+            final int dirOfs = hb.getInt();
+            if (num <= 0 || num > 65536 || dirOfs <= 0 || dirOfs >= f.length()) {
+                return null;
+            }
+            f.seek(dirOfs);
+            final byte[] dir = new byte[Math.min(num * 16, (int) (f.length() - dirOfs))];
+            f.readFully(dir);
+            for (int i = 0; i + 16 <= dir.length; i += 16) {
+                int end = 8;
+                while (end < 16 && dir[i + end] != 0) {
+                    end++;
+                }
+                final String name = new String(dir, i + 8, end - 8,
+                    java.nio.charset.StandardCharsets.US_ASCII);
+                for (String[] g : FOREIGN_GAMES) {
+                    if (g[0].equals(name)) {
+                        return g[1];
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+            return null;
+        }
+        return null;
+    }
+
+    /**
      * Whether this WAD names its maps ExMy rather than MAPxx. Read from the file's own
      * directory, so it is answerable before anything has been loaded or a level raised.
      */

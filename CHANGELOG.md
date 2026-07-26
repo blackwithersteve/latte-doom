@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.42.0-alpha] - 2026-07-26
+
+### Fixed
+
+- Heretic, Hexen and Strife WADs were treated as playable game data. They are structurally
+  valid WADs with a palette and maps, so every test for a base WAD passed and the engine
+  only failed later on lumps that are not there. Both load commands now recognise them and
+  name the game.
+
 ## [0.41.0-alpha] - 2026-07-26
 
 ### Fixed

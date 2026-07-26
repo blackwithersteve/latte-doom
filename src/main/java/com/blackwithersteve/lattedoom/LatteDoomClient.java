@@ -351,6 +351,13 @@ public class LatteDoomClient implements ClientModInitializer {
             src.sendFeedback(Component.literal("§c" + why));
             return;
         }
+        final String other = LatteDoomConfig.foreignGame(p);
+        if (other != null) {
+            src.sendFeedback(Component.literal("§e" + p.getFileName() + "§c is "
+                + other + ", not DOOM.§r This is a DOOM source port and cannot run it."
+                + " Load §eDOOM.WAD§r or §eDOOM2.WAD§r instead."));
+            return;
+        }
         if (!LatteDoomConfig.isIwadFile(p)) {
             // A real WAD, but not one that can stand alone: either a patch WAD or a
             // resource WAD with no levels. Both are usable, through the other command.
@@ -401,6 +408,13 @@ public class LatteDoomClient implements ClientModInitializer {
                 if (why != null) {
                     src.sendFeedback(Component.literal("§c" + why
                         + "§r The patch list is unchanged."));
+                    return;
+                }
+                final String otherGame = LatteDoomConfig.foreignGame(p);
+                if (otherGame != null) {
+                    src.sendFeedback(Component.literal("§e" + p.getFileName() + "§c is "
+                        + otherGame + ", not DOOM.§r This is a DOOM source port and cannot"
+                        + " run it. The patch list is unchanged."));
                     return;
                 }
                 if (LatteDoomConfig.isIwadFile(p)) {
