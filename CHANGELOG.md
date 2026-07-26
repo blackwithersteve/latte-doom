@@ -1,5 +1,51 @@
 # Changelog
 
+## [0.40.0-alpha] - 2026-07-26
+
+### Added
+
+- Commands to grant engine inventory and type cheat codes: `/lgive` for weapons, ammo, keys
+  and armour, and `/doomcheat` for any code the engine recognises.
+- `/doomleave` returns to the overworld. A guest leaves; the level's owner also takes it down.
+- `/lattedoom` lists the common commands, `/lattedoom advanced` the rest.
+- Speed effects apply to a transformed player.
+- Shields block engine damage when raised towards the attack.
+- Minecraft attacks alert monsters and trigger shootable line specials.
+- DOOM weapons picked up by an untransformed player convert to Minecraft rewards by tier,
+  through a new `loot` action in `pickups.properties`.
+- `melee-scale` and `sound-driver` settings.
+
+### Fixed
+
+- Untransformed players were clipped at the marine's size and caught on ceilings and steps.
+  They now use their own height and width.
+- Minecraft attacks aimed at engine positions rather than drawn ones and missed moving
+  targets entirely.
+- The arch-vile's throw never reached the player, and monster projectiles could be aimed at
+  a floor height the player did not occupy.
+- A Nightmare game left later games with fast monsters until the process exited.
+- The menu offered episode selection for WADs that have no episodes.
+- Engine audio continued after leaving a world, and could fall a second behind after a
+  level change.
+- Blocks placed inside a level fell out of the world when broken, and survived a map change.
+- The status bar could be absent while the vanilla interface was already hidden.
+
+### Security
+
+- The snapshot decoder sized allocations from unvalidated counts, so a small packet could
+  exhaust server memory before any authorisation ran.
+- Level ownership, which authorises engine damage, could be claimed without validation, and
+  the damage it authorised had no participant check or rate limit.
+- Self-teleport, dimension entry and exit, scavenging and engine hits are bounded and
+  rate-limited.
+
+### Changed
+
+- The WAD commands explain what a file is when they refuse it, accept quoted paths and names
+  containing spaces, and require a base WAD to contain levels.
+- Rejoining re-reads the WAD folder, so adding game data and rejoining now works as the
+  join message says.
+
 ## [0.37.0-alpha] - 2026-07-25
 
 ### Fixed

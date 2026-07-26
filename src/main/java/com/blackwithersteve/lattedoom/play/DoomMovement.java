@@ -156,8 +156,12 @@ public final class DoomMovement {
         final double fx = Math.cos(ang), fy = Math.sin(ang);
         final double rx = fy, ry = -fx;
         final boolean run = runHeld || autorun;
-        final double fwd = Math.signum(input.z) * (run ? THRUST_RUN : THRUST_WALK);
-        final double side = -Math.signum(input.x) * (run ? SIDE_RUN : SIDE_WALK);
+        // Minecraft's movement-speed attribute scales the engine's thrust, so speed and
+        // slowness effects reach a transformed player. An unaffected player sits at the
+        // default attribute value and the ratio is 1, which leaves DOOM's constants exact.
+        final double speedScale = speedScale(p);
+        final double fwd = Math.signum(input.z) * (run ? THRUST_RUN : THRUST_WALK) * speedScale;
+        final double side = -Math.signum(input.x) * (run ? SIDE_RUN : SIDE_WALK) * speedScale;
 
         final double startWx = p.getX(), startWy = p.getY(), startWz = p.getZ();
         ticAccum += TICS_PER_MC_TICK;
@@ -443,6 +447,25 @@ public final class DoomMovement {
         return (toX, toY) -> LatteWorld.increasesThingOverlap(fromX, fromY, toX, toY);
     }
 
+    /** An engine attack threw the player upward. A transformed player runs the engine's own
+     * integrator, so the impulse goes into its vertical momentum rather than into Minecraft
+     * velocity; the units are already map units per tic. */
+    public static void launch(double momzUnitsPerTic) {
+        if (marineWas) {
+            pendingLaunch = Math.max(pendingLaunch, momzUnitsPerTic);
+        }
+    }
+
+    /** An upward impulse waiting to be applied at the next tic. It cannot be written into
+     * momH directly: the integrator zeroes the vertical whenever the player is grounded, so
+     * an impulse delivered between tics is erased before it is ever integrated. */
+    private static double pendingLaunch;
+
+    /** Drops the floor the player was riding, so nothing follows a sector they have left. */
+    public static void releaseGlue() {
+        glueSector = -1;
+    }
+
     /** The sector the local player is standing on (-1 airborne/outside). */
     public static int gluedSector() {
         return glueSector;
@@ -493,6 +516,23 @@ public final class DoomMovement {
         placedWy = worldY;
     }
 
+    /** The player's movement-speed attribute as a ratio of the unmodified default, clamped
+     * so an extreme effect cannot push the integrator past its own move cap. */
+    private static double speedScale(LocalPlayer p) {
+        final var attr = p.getAttribute(net.minecraft.world.entity.ai.attributes.Attributes.MOVEMENT_SPEED);
+        if (attr == null) {
+            return 1.0;
+        }
+        // The entity's own base value, not the attribute's registry default. Those differ:
+        // movement speed is registered with a default of 0.7 while a player's base is 0.1,
+        // so dividing by the registry default leaves an unaffected player at a fifth speed.
+        final double base = attr.getBaseValue();
+        if (base <= 0.0) {
+            return 1.0;
+        }
+        return Math.max(0.2, Math.min(4.0, attr.getValue() / base));
+    }
+
     /** One DOOM tic of P_MovePlayer accel + P_XYMovement friction, shared by both worlds.
      * {@code friction} is the per-tic momentum factor: the standard constant everywhere
      * except a Boom friction sector, where the snapshot's per-sector value applies. */
@@ -516,6 +556,13 @@ public final class DoomMovement {
             momH = 0;
         } else {
             momH -= GRAVITY; // no air control and no jump: momentum alone carries the player
+        }
+        if (pendingLaunch > 0) {
+            // Applied after the grounded branch, which would otherwise zero it, and it lifts
+            // the player off the floor so the next tic integrates the rise.
+            momH = pendingLaunch;
+            pendingLaunch = 0;
+            blockGrounded = false;
         }
         momX = Math.max(-MAXMOVE, Math.min(MAXMOVE, momX));
         momY = Math.max(-MAXMOVE, Math.min(MAXMOVE, momY));
@@ -637,9 +684,13 @@ public final class DoomMovement {
         // is the vertical. Movement out of an object is allowed only from deep inside one;
         // merely touching a monster still blocks.
         final DoomCollision.ThingBlocker things = thingBlocker(x, yD);
+        // Clip an untransformed player at their own Minecraft box rather than a transformed
+        // player's 56 units. At 1.8 blocks they are 50.4, and clipping them at 56 refuses
+        // openings they visibly fit through and stops them on a step up into a low ceiling.
         final DoomCollision.Result r = DoomCollision.move(map, x, yD, h,
             dx * LatteWorld.UNITS, -dz * LatteWorld.UNITS, dy * LatteWorld.UNITS,
-            things);
+            things, p.getBbHeight() * LatteWorld.UNITS,
+            p.getBbWidth() * 0.5 * LatteWorld.UNITS);
         if (r.onGround()) {
             final int sec = map.sectorAt(r.x(), r.y());
             // The same rule as for a transformed player: only genuine floor contact counts

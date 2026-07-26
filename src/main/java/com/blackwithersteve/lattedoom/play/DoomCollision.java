@@ -54,25 +54,51 @@ public final class DoomCollision {
     /** As above, but a ThingBlocker also stops the box: barrels, pillars, live monsters. */
     public static Result move(DoomMap map, double x, double y, double h,
                               double mx, double my, double mh, ThingBlocker things) {
+        return move(map, x, y, h, mx, my, mh, things, HEIGHT);
+    }
+
+    /**
+     * As above for a body of the given height in map units. A transformed player is the
+     * engine's 56 units tall, while an untransformed one keeps their Minecraft box of 1.8
+     * blocks, which is 50.4 units. Clipping the latter at 56 refuses openings their body
+     * visibly fits through and stops them on a step up into a low ceiling.
+     */
+    public static Result move(DoomMap map, double x, double y, double h,
+                              double mx, double my, double mh, ThingBlocker things,
+                              double height) {
+        return move(map, x, y, h, mx, my, mh, things, height, RADIUS);
+    }
+
+    /**
+     * As above for a body of the given height and radius in map units. A transformed player
+     * is the engine's 56 by 16; an untransformed one keeps their Minecraft box, which is
+     * narrower as well as shorter, and clipping them at the wider radius refuses gaps their
+     * body plainly fits through.
+     */
+    public static Result move(DoomMap map, double x, double y, double h,
+                              double mx, double my, double mh, ThingBlocker things,
+                              double height, double radius) {
         if (Math.abs(mx) > 24 || Math.abs(my) > 24) {
-            final Result first = move(map, x, y, h, mx / 2, my / 2, mh / 2, things);
-            final Result second = move(map, first.x, first.y, first.h, mx / 2, my / 2, mh / 2, things);
+            final Result first = move(map, x, y, h, mx / 2, my / 2, mh / 2, things, height, radius);
+            final Result second = move(map, first.x, first.y, first.h,
+                mx / 2, my / 2, mh / 2, things, height, radius);
             return new Result(second.x, second.y, second.h,
                 first.blockedX || second.blockedX, first.blockedY || second.blockedY,
                 second.slid() ? second.slideDirX : first.slideDirX,
                 second.slid() ? second.slideDirY : first.slideDirY,
                 second.onGround, second.floorZ, second.ceilZ);
         }
-        return moveOnce(map, x, y, h, mx, my, mh, things);
+        return moveOnce(map, x, y, h, mx, my, mh, things, height, radius);
     }
 
     private static Result moveOnce(DoomMap map, double x, double y, double h,
-                                   double mx, double my, double mh, ThingBlocker things) {
+                                   double mx, double my, double mh, ThingBlocker things,
+                                   double height, double radius) {
         double nx = x, ny = y;
         boolean blockedX = false, blockedY = false;
         double slideX = 0, slideY = 0;
 
-        final Check dest = check(map, x + mx, y + my, h, things);
+        final Check dest = check(map, x + mx, y + my, h, things, height, radius);
         if (dest.ok) {
             nx = x + mx;
             ny = y + my;
@@ -94,7 +120,7 @@ public final class DoomCollision {
                 if (t != 0) {
                     double frac = 1.0;
                     for (int i = 0; i < 5; i++) {
-                        final Check slide = check(map, x + t * frac * ux, y + t * frac * uy, h, things);
+                        final Check slide = check(map, x + t * frac * ux, y + t * frac * uy, h, things, height, radius);
                         if (slide.ok) {
                             nx = x + t * frac * ux;
                             ny = y + t * frac * uy;
@@ -108,12 +134,12 @@ public final class DoomCollision {
             }
             if (nx == x && ny == y) {
                 // Per-axis fallbacks, as P_XYMovement does.
-                final Check onlyX = check(map, x + mx, y, h, things);
+                final Check onlyX = check(map, x + mx, y, h, things, height, radius);
                 if (onlyX.ok && mx != 0) {
                     nx = x + mx;
                     blockedY = true;
                 } else {
-                    final Check onlyY = check(map, x, y + my, h, things);
+                    final Check onlyY = check(map, x, y + my, h, things, height, radius);
                     if (onlyY.ok && my != 0) {
                         ny = y + my;
                         blockedX = true;
@@ -126,12 +152,12 @@ public final class DoomCollision {
         } else if (dest.thingBlocked) {
             // A solid object, with no wall to project onto: fall back to per-axis movement
             // so the player slides around its bounding box rather than sticking to it.
-            final Check onlyX = check(map, x + mx, y, h, things);
+            final Check onlyX = check(map, x + mx, y, h, things, height, radius);
             if (onlyX.ok && mx != 0) {
                 nx = x + mx;
                 blockedY = true;
             } else {
-                final Check onlyY = check(map, x, y + my, h, things);
+                final Check onlyY = check(map, x, y + my, h, things, height, radius);
                 if (onlyY.ok && my != 0) {
                     ny = y + my;
                     blockedX = true;
@@ -147,8 +173,17 @@ public final class DoomCollision {
 
         // Resolve the heights from the box the move ended in. That box is free of objects
         // by construction, so the plain map test gives the floor and ceiling.
-        final Check stand = check(map, nx, ny, h, NOTHING);
-        final double floorZ = stand.floorZ, ceilZ = stand.ceilZ;
+        final Check stand = check(map, nx, ny, h, NOTHING, height, radius);
+        double floorZ = stand.floorZ, ceilZ = stand.ceilZ;
+        if (stand.line == null && !stand.ok && floorZ == 0 && ceilZ == 0) {
+            // A point outside every sector returns the sentinel Check(false, null, 0, 0),
+            // whose zeroes mean "no answer" rather than a floor at height zero. Using them
+            // drops the player to map height 0, which on most levels is far below the floor.
+            // Keeping the height the move started at leaves the decision to the caller's own
+            // out-of-level handling instead.
+            floorZ = h;
+            ceilZ = h + height;
+        }
 
         // P_ZMovement
         double nh = h + mh;
@@ -157,8 +192,8 @@ public final class DoomCollision {
             nh = floorZ;
             ground = true;
         }
-        if (nh + HEIGHT > ceilZ) {
-            nh = Math.max(floorZ, ceilZ - HEIGHT);
+        if (nh + height > ceilZ) {
+            nh = Math.max(floorZ, ceilZ - height);
         }
         // A grounded player rises with the floor when stepping up.
         if (mh == 0 && h <= floorZ + 0.001) {
@@ -172,7 +207,8 @@ public final class DoomCollision {
                          boolean thingBlocked) {}
 
     /** P_CheckPosition at (px,py) for a marine whose feet are at height h. */
-    private static Check check(DoomMap map, double px, double py, double h, ThingBlocker things) {
+    private static Check check(DoomMap map, double px, double py, double h,
+                               ThingBlocker things, double height, double radius) {
         final int sec = map.sectorAt(px, py);
         if (sec < 0) {
             return new Check(false, null, 0, 0, false); // the void
@@ -182,11 +218,11 @@ public final class DoomCollision {
 
         for (DoomMap.Line l : map.lines) {
             // Cheap bounding-box rejection first.
-            if (Math.max(l.x1(), l.x2()) < px - RADIUS || Math.min(l.x1(), l.x2()) > px + RADIUS
-                || Math.max(l.y1(), l.y2()) < py - RADIUS || Math.min(l.y1(), l.y2()) > py + RADIUS) {
+            if (Math.max(l.x1(), l.x2()) < px - radius || Math.min(l.x1(), l.x2()) > px + radius
+                || Math.max(l.y1(), l.y2()) < py - radius || Math.min(l.y1(), l.y2()) > py + radius) {
                 continue;
             }
-            if (!boxStraddlesLine(px, py, RADIUS, l)) {
+            if (!boxStraddlesLine(px, py, radius, l)) {
                 continue;
             }
             if (l.backSector() < 0 || l.frontSector() < 0 || (l.flags() & 0x1) != 0) {
@@ -196,14 +232,14 @@ public final class DoomCollision {
             final double fc = map.ceilNow(l.frontSector()), bc = map.ceilNow(l.backSector());
             final double openBot = Math.max(ff, bf);
             final double openTop = Math.min(fc, bc);
-            if (openTop - openBot < HEIGHT     // the opening is shorter than the player
-                || openBot - h > STEP_UP) {    // the step up is taller than 24 units
+            if (openTop - openBot < height    // the opening is shorter than the player
+                || openBot - h > STEP_UP) {   // the step up is taller than 24 units
                 return new Check(false, l, floorZ, ceilZ, false);
             }
             floorZ = Math.max(floorZ, openBot);
             ceilZ = Math.min(ceilZ, openTop);
         }
-        if (ceilZ - floorZ < HEIGHT || ceilZ - h < HEIGHT || floorZ - h > STEP_UP) {
+        if (ceilZ - floorZ < height || ceilZ - h < height || floorZ - h > STEP_UP) {
             return new Check(false, null, floorZ, ceilZ, false);
         }
         if (things.blockedAt(px, py)) {

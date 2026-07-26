@@ -15,7 +15,7 @@ import java.util.Set;
  * {@code config/latte-doom/pickups.properties}. Keyed by four-character sprite name, so the
  * table still works for items a DEHACKED patch has modified. Unlisted sprites, and those
  * mapped to {@code none}, are left on the floor. Actions: {@code heal}, {@code food},
- * {@code give <item-id> <count>}.
+ * {@code give <item-id> <count>}, {@code loot <1-5>}.
  */
 public final class PickupConfig {
 
@@ -35,6 +35,7 @@ public final class PickupConfig {
         #   heal <points>       Minecraft health points (2 = one heart)
         #   food <points>       Minecraft hunger points (2 = one drumstick)
         #   give <item-id> <n>  any Minecraft item, e.g. give minecraft:arrow 4
+        #   loot <1-5>          a random reward from that tier, for weapons
         #   none                not collectable by an untransformed player
         #
         # Common sprites: STIM stimpack, MEDI medikit, BON1 health bonus,
@@ -53,6 +54,16 @@ public final class PickupConfig {
         SHEL = give minecraft:arrow 4
         SBOX = give minecraft:arrow 16
         BPAK = give minecraft:arrow 24
+
+        # Weapons. An untransformed player cannot use a DOOM weapon, so these convert to
+        # supplies instead. "loot <1-5>" draws a random reward from that tier.
+        CSAW = loot 1
+        SHOT = loot 1
+        SGN2 = loot 2
+        MGUN = loot 2
+        LAUN = loot 3
+        PLAS = loot 4
+        BFUG = loot 5
 
         # Reserved for transformed players by default; uncomment to convert them too.
         # SOUL = heal 40
@@ -89,6 +100,44 @@ public final class PickupConfig {
         }
     }
 
+    private static final java.util.Random LOOT = new java.util.Random();
+
+    /** A tiered reward for a DOOM weapon. A weapon is of no use to an untransformed
+     * player, so it converts to Minecraft supplies instead, and the better the weapon the
+     * better the roll. Every call draws independently, so one tier covers several
+     * different rewards. */
+    private static Action rollLoot(int tier) {
+        final java.util.Random r = LOOT;
+        final int roll = r.nextInt(3);
+        return switch (tier) {
+            case 1 -> switch (roll) { // chainsaw, shotgun
+                case 0 -> new Action(0, 0, "minecraft:arrow", 8 + r.nextInt(9));
+                case 1 -> new Action(0, 6, "", 0);
+                default -> new Action(0, 0, "minecraft:iron_ingot", 1 + r.nextInt(2));
+            };
+            case 2 -> switch (roll) { // super shotgun, chaingun
+                case 0 -> new Action(0, 0, "minecraft:arrow", 16 + r.nextInt(17));
+                case 1 -> new Action(0, 0, "minecraft:iron_ingot", 2 + r.nextInt(3));
+                default -> new Action(0, 0, "minecraft:golden_apple", 1);
+            };
+            case 3 -> switch (roll) { // rocket launcher
+                case 0 -> new Action(0, 0, "minecraft:iron_ingot", 4 + r.nextInt(4));
+                case 1 -> new Action(0, 0, "minecraft:tnt", 2 + r.nextInt(3));
+                default -> new Action(0, 0, "minecraft:diamond", 1);
+            };
+            case 4 -> switch (roll) { // plasma rifle
+                case 0 -> new Action(0, 0, "minecraft:diamond", 1 + r.nextInt(2));
+                case 1 -> new Action(0, 0, "minecraft:experience_bottle", 4 + r.nextInt(5));
+                default -> new Action(0, 0, "minecraft:golden_apple", 2);
+            };
+            default -> switch (roll) { // BFG
+                case 0 -> new Action(0, 0, "minecraft:diamond", 3 + r.nextInt(3));
+                case 1 -> new Action(0, 0, "minecraft:netherite_scrap", 1);
+                default -> new Action(0, 0, "minecraft:enchanted_golden_apple", 1);
+            };
+        };
+    }
+
     private static Action parse(String value) {
         final String[] p = value.trim().split("\\s+");
         try {
@@ -96,6 +145,7 @@ public final class PickupConfig {
                 case "heal" -> new Action(Integer.parseInt(p[1]), 0, "", 0);
                 case "food" -> new Action(0, Integer.parseInt(p[1]), "", 0);
                 case "give" -> new Action(0, 0, p[1], p.length > 2 ? Integer.parseInt(p[2]) : 1);
+                case "loot" -> rollLoot(Math.max(1, Math.min(5, Integer.parseInt(p[1]))));
                 default -> null; // "none" and anything unrecognised: not convertible
             };
         } catch (RuntimeException bad) {
@@ -105,8 +155,15 @@ public final class PickupConfig {
 
     /** The conversion for a sprite name, or null when that item is not convertible. */
     public static Action action(String sprite) {
-        return table.get(sprite);
+        final Action a = table.get(sprite);
+        // An entry whose item id is the loot sentinel carries its tier in the count and is
+        // drawn here, at the moment of the pickup, instead of reusing one fixed reward.
+        return a != null && LOOT_TIER.equals(a.item()) ? rollLoot(a.count()) : a;
     }
+
+    /** Sentinel item id marking a parsed action as a loot tier to roll at pickup rather
+     * than a literal item. The leading NUL cannot occur in a real item id. */
+    private static final String LOOT_TIER = "\0loot";
 
     /** Immutable snapshot of the sprite names the engine may consume on contact. */
     public static Set<String> consumableSprites() {

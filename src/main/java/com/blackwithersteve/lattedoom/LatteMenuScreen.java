@@ -17,8 +17,9 @@ import java.util.List;
  * Main menu, drawn from the WAD's own art with the geometry and flow of {@code m_menu.c}:
  * New Game to episode to skill, then the level is raised. Episodes appear for whichever
  * {@code M_EPIn} patches the loaded WAD provides, so a patch WAD's extra episode shows up
- * on its own. Load and Save are absent until savegames exist. Falls back to plain text if
- * the menu lumps cannot be loaded.
+ * on its own, and the episode page is skipped entirely for a WAD whose maps are numbered
+ * MAPxx. Load and Save are absent until savegames exist. Falls back to plain text if the
+ * menu lumps cannot be loaded.
  */
 public final class LatteMenuScreen extends Screen {
 
@@ -173,7 +174,11 @@ public final class LatteMenuScreen extends Screen {
                 switch (mainOn) {
                     case 0 -> { // New Game
                         DoomSfx.play(SND_SWTCHN, false, 0, 0);
-                        menu = episodes.size() > 1 ? EPISODE : SKILL;
+                        // A WAD that numbers its maps MAPxx has no episodes to choose
+                        // between, so the episode page is skipped even when the WAD still
+                        // carries the M_EPIn patches.
+                        menu = com.blackwithersteve.lattedoom.render.LatteWorld.hasEpisodes()
+                            && episodes.size() > 1 ? EPISODE : SKILL;
                         chosenEpisode = 1;
                     }
                     case 1 -> { // Options -> the DOOM Sound Volume screen

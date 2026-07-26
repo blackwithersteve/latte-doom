@@ -47,14 +47,27 @@ public final class DoomHost {
     // ---- Player mirroring: the Minecraft player's position is written into the engine's
     // own player object, so that every sense a monster uses (sight, aim, infighting)
     // tracks the real player. Applied on the engine thread at a frame boundary. ----
-    private volatile boolean mirrorOn;
+    /**
+     * The mirror is published as one immutable value rather than a field per component. Six
+     * separate volatile fields would let the engine read the gate from one call and the
+     * coordinates from the next, because a volatile read only orders against itself: a frame
+     * could admit a live epoch and then apply the zeroes written by the release that followed
+     * it, relinking the player's object to map coordinate (0,0).
+     *
+     * <p>{@code epoch} is the level epoch the client's mirrored coordinates were computed
+     * against, echoed back from the snapshot. Only positions stamped with the current epoch
+     * are applied, so a fresh spawn is never overwritten by coordinates converted through the
+     * previous map's origin.
+     */
+    private record Mirror(boolean on, double x, double y, double z, double angleDeg,
+                          long epoch) {}
+
+    private static final Mirror MIRROR_OFF = new Mirror(false, 0, 0, 0, 0, 0);
+
+    private final java.util.concurrent.atomic.AtomicReference<Mirror> mirror =
+        new java.util.concurrent.atomic.AtomicReference<>(MIRROR_OFF);
+
     private boolean mirrorWasOn; // engine-thread only
-    private volatile double mirrorX, mirrorY, mirrorZ, mirrorAngleDeg;
-    /** The level epoch the client's mirrored coordinates were computed against, echoed back
-     * from the snapshot. Only positions stamped with the current epoch are applied, so a
-     * fresh spawn is never overwritten by coordinates converted through the previous map's
-     * origin. */
-    private volatile long mirrorEpoch;
     private boolean mirrorEpochWasOk; // engine-thread only: rising-edge health re-baseline
     // ---- Teleport follow, engine thread only. After a teleport moves the player, mirror
     // position writes are held until the client's own mirror lands near the destination.
@@ -67,6 +80,8 @@ public final class DoomHost {
     /** Interactions the mirrored player performed, fired through the engine's handlers. */
     private final java.util.concurrent.ConcurrentLinkedQueue<int[]> pendingCross =
         new java.util.concurrent.ConcurrentLinkedQueue<>();
+    private final java.util.concurrent.atomic.AtomicBoolean pendingAlert =
+        new java.util.concurrent.atomic.AtomicBoolean();
     private final java.util.concurrent.atomic.AtomicBoolean pendingUse =
         new java.util.concurrent.atomic.AtomicBoolean();
     /** Engine hit points taken off the mirrored player since the last drain. */
@@ -78,6 +93,7 @@ public final class DoomHost {
     /** The Minecraft player's health in engine points, written into the engine each frame. */
     private volatile int mirrorHealth = 100;
     private int lastWrittenHealth = 100; // engine-thread only
+    private int lastClipTic = -1;        // engine-thread only
     /** Whether the local player is transformed; DOOM items are collected only then. */
     private volatile boolean marineMode;
     private int lastPickupTic = -1; // engine-thread only
@@ -287,13 +303,15 @@ public final class DoomHost {
                 d.music.PauseSong(0);
                 d.music.ShutdownMusic();
             }
-        } catch (Throwable ignored) {
+        } catch (Throwable t) {
+            noteSwallowed("site1", t);
         }
         try {
             if (d.soundDriver != null) {
                 d.soundDriver.ShutdownSound();
             }
-        } catch (Throwable ignored) {
+        } catch (Throwable t) {
+            noteSwallowed("site2", t);
         }
     }
 
@@ -302,6 +320,22 @@ public final class DoomHost {
      * the finished frame, then parks here while the engine is frozen, which holds the
      * engine at a frame boundary without consuming CPU.
      */
+
+    /** Inventory grants, weapon selection and typed cheats are applied whenever the engine
+     * is running. Draining them inside the mirroring gate instead lets an engine outside a
+     * level queue them without applying any, then apply the whole backlog on the next level
+     * entry. None of them depend on the player being mirrored. */
+    private void applyPlayerRequests(doom.DoomMain<?, ?> d) {
+        if (d.players[0] == null) {
+            return;
+        }
+        applyGrants(d);
+        final g.Signals.ScanCode ck = pendingKeys.poll();
+        if (ck != null) {
+            postKey(ck, true);
+            postKey(ck, false);
+        }
+    }
 
     /**
      * Publishes world state after every completed tic. Publishing per display frame instead
@@ -316,7 +350,8 @@ public final class DoomHost {
         // A capture failure must not break the tic tap, which runs inside the engine loop.
         try {
             markSeenLines(d); // automap reveal, before capture so this tic's snapshot has it
-        } catch (Throwable ignored) {
+        } catch (Throwable t) {
+            noteSwallowed("site3", t);
         }
         try {
             final WorldSnapshot ws = WorldSnapshot.capture(d);
@@ -369,7 +404,8 @@ public final class DoomHost {
                 is.parTics = d.wminfo.partime;
                 interSnap = is;
             }
-        } catch (Throwable ignored) {
+        } catch (Throwable t) {
+            noteSwallowed("site4", t);
         }
     }
 
@@ -414,6 +450,7 @@ public final class DoomHost {
         if (d == null) {
             return;
         }
+        applyPlayerRequests(d);
         // The engine advances its tic counter every loop, but the level ticker that runs
         // monster AI, movers and death states only runs inside a level. If the tic counter
         // climbs while level time stands still, monsters freeze and nothing can be killed,
@@ -456,10 +493,14 @@ public final class DoomHost {
                 // position writes are held until the client's mirror lands near the
                 // destination. Otherwise the next frame's write returns the body through the
                 // teleporter before the client ever observes the move.
+                //
+                // One read for the whole frame: every field below has to describe the same
+                // instant, which is why the mirror is published as a single value.
+                final Mirror mir = mirror.get();
                 final int tc = mochadoom.Engine.PLAYER_TELEPORT_COUNT;
                 if (tc != teleSyncCount) {
                     teleSyncCount = tc;
-                    if (mirrorOn) {
+                    if (mir.on()) {
                         telePending = true;
                         telePendingFrames = 0;
                         teleDstX = mo.x / 65536.0;
@@ -467,7 +508,7 @@ public final class DoomHost {
                     }
                 }
                 if (telePending
-                    && (Math.hypot(mirrorX - teleDstX, mirrorY - teleDstY) < 64.0
+                    && (Math.hypot(mir.x() - teleDstX, mir.y() - teleDstY) < 64.0
                         || ++telePendingFrames > 90)) {
                     telePending = false;
                 }
@@ -476,9 +517,9 @@ public final class DoomHost {
                 // untouched until the client has seen it; without the gate the write replaces
                 // every new spawn with the previous position converted through the new origin.
                 final WorldSnapshot ss = snapshot;
-                final boolean epochOk = ss != null && mirrorEpoch != 0
-                    && mirrorEpoch == ss.levelEpoch;
-                if (mirrorOn && epochOk) {
+                final boolean epochOk = ss != null && mir.epoch() != 0
+                    && mir.epoch() == ss.levelEpoch;
+                if (mir.on() && epochOk) {
                     if (!mirrorEpochWasOk) {
                         // Re-engaging on a fresh instance: re-baseline the health difference
                         // so the reborn 100 is not counted as healing
@@ -490,8 +531,8 @@ public final class DoomHost {
                         // Relink through the blockmap (P_Unset/SetThingPosition) so monster
                         // melee-range and thing collision see the true cell, not stale coords
                         d.actions.UnsetThingPosition(mo);
-                        mo.x = (int) (mirrorX * 65536.0);
-                        mo.y = (int) (mirrorY * 65536.0);
+                        mo.x = (int) (mir.x() * 65536.0);
+                        mo.y = (int) (mir.y() * 65536.0);
                         d.actions.SetThingPosition(mo);
                         // Refresh floorz and ceilingz for the new position. P_TryMove does
                         // this and the mirror bypasses it, so without the call they keep the
@@ -499,8 +540,17 @@ public final class DoomHost {
                         // own movement code. P_ZMovement then clamps the object to a floor
                         // it is nowhere near, and everything that aims at it, including
                         // P_SpawnMissile's vertical aim, uses that height.
-                        d.actions.ThingHeightClip(mo);
-                        mo.z = (int) (mirrorZ * 65536.0);
+                        //
+                        // Once per tic rather than once per frame. This method runs at the
+                        // display frame rate, and CheckPosition walks the blockmap and every
+                        // linedef near the player, which at a few hundred frames a second is
+                        // enough work on the engine thread to starve the tic loop and delay
+                        // sound. Nothing reads floorz between tics, so per tic is enough.
+                        if (d.gametic != lastClipTic) {
+                            lastClipTic = d.gametic;
+                            d.actions.ThingHeightClip(mo);
+                        }
+                        mo.z = (int) (mir.z() * 65536.0);
                         // Damage floors: the engine's sector-damage check compares the
                         // player's height against the floor height for exact equality in
                         // fixed point, and a height derived from Minecraft's floating-point
@@ -510,8 +560,17 @@ public final class DoomHost {
                         if (Math.abs(mo.z - fz) < (4 << 16)) {
                             mo.z = fz;
                         }
+                        // The engine launches the player upward for some attacks, most
+                        // visibly A_VileAttack, by writing momz on the player object. The
+                        // mirror overwrites that object every frame, so the launch would be
+                        // erased before it had any effect and the arch-vile would land its
+                        // damage without the throw that goes with it. Capture an upward
+                        // impulse large enough to be deliberate and hand it to Minecraft.
+                        if (mo.momz > LAUNCH_MIN) {
+                            pendingLaunch.accumulateAndGet(mo.momz, Math::max);
+                        }
                         mo.momx = mo.momy = mo.momz = 0;
-                        mo.angle = ((long) (mirrorAngleDeg / 360.0 * 4294967296.0)) & 0xFFFFFFFFL;
+                        mo.angle = ((long) (mir.angleDeg() / 360.0 * 4294967296.0)) & 0xFFFFFFFFL;
                         d.players[0].viewz = mo.z + data.Defines.VIEWHEIGHT;
                     }
                     d.players[0].cheats &= ~player_t.CF_GODMODE; // mirrored: clear god mode
@@ -617,11 +676,22 @@ public final class DoomHost {
                         if (pendingUse.getAndSet(false)) {
                             d.actions.UseLines(d.players[0]);
                         }
+                        Integer sl;
+                        while ((sl = pendingShoot.poll()) != null) {
+                            if (sl >= 0 && sl < d.levelLoader.numlines) {
+                                d.actions.ShootSpecialLine(mo, d.levelLoader.lines[sl]);
+                            }
+                        }
+                        if (pendingAlert.getAndSet(false) && mo.subsector != null) {
+                            d.actions.NoiseAlert(mo, mo);
+                        }
                     } else {
                         pendingCross.clear();
                         pendingUse.set(false);
+                        pendingAlert.set(false);
+                        pendingShoot.clear();
                     }
-                } else if (mirrorOn) {
+                } else if (mir.on()) {
                     // Mirroring is active but the incoming position belongs to a previous
                     // level instance, so the client has not seen this spawn yet. Leave the
                     // player where the engine placed them and discard interactions computed
@@ -633,6 +703,8 @@ public final class DoomHost {
                 } else {
                     pendingCross.clear();
                     pendingUse.set(false);
+                    pendingShoot.clear();  // queued against a map that is no longer standing
+                    pendingAlert.set(false);
                     pendingDamage.set(0);
                     mirrorEpochWasOk = false;
                     mochadoom.Engine.LETHAL_OVERFLOW.set(0); // not possessing: clear any stale overflow
@@ -682,7 +754,8 @@ public final class DoomHost {
                     knockPending = true;
                 }
             }
-        } catch (Throwable ignored) {
+        } catch (Throwable t) {
+            noteSwallowed("site5", t);
         }
         if (mapRestartPending) {
             // The player respawned after dying inside the level, so the map restarts as it
@@ -692,7 +765,8 @@ public final class DoomHost {
                 if (d.gameskill != null && d.gamemap > 0) {
                     d.DeferedInitNew(d.gameskill, d.gameepisode, d.gamemap);
                 }
-            } catch (Throwable ignored) {
+            } catch (Throwable t) {
+                noteSwallowed("site6", t);
             }
         }
         if (terminate) {
@@ -718,7 +792,8 @@ public final class DoomHost {
                 // every other engine caller passes 0-15 multiplied by 8. A raw 0-15 value caps
                 // music at about 12 percent, so the slider is mapped into the 0-127 domain.
                 d.doomSound.SetMusicVolume(Math.round(music / 15f * 127f));
-            } catch (Throwable ignored) {
+            } catch (Throwable t) {
+                noteSwallowed("site7", t);
             }
         }
     }
@@ -767,6 +842,7 @@ public final class DoomHost {
         public volatile double x, y, z, angleDeg;
         public volatile int buttons;      // bit0 fire, bit1 use
         public volatile int slot = -1;    // 0..6 requested weapon, -1 none
+        int lastClipTic = -1;             // engine-thread only
         public volatile int healthMc = 100;
         public volatile long lastSeenMs;
         final java.util.Queue<int[]> crossings = new java.util.concurrent.ConcurrentLinkedQueue<>();
@@ -856,7 +932,10 @@ public final class DoomHost {
             mo.x = (int) (rb.x * 65536.0);
             mo.y = (int) (rb.y * 65536.0);
             d.actions.SetThingPosition(mo);
-            d.actions.ThingHeightClip(mo); // same floor refresh as the local mirror
+            if (d.gametic != rb.lastClipTic) {
+                rb.lastClipTic = d.gametic;
+                d.actions.ThingHeightClip(mo); // same floor refresh, likewise once per tic
+            }
             mo.z = (int) (rb.z * 65536.0);
             mo.momx = mo.momy = mo.momz = 0;
             mo.angle = ((long) (rb.angleDeg / 360.0 * 4294967296.0)) & 0xFFFFFFFFL;
@@ -907,13 +986,169 @@ public final class DoomHost {
      * engine ignores mirror positions from a stale level instance (0 = legacy/none). */
     public void setPlayerMirror(boolean on, double x, double y, double z, double angleDeg,
                                 long epoch) {
-        mirrorX = x;
-        mirrorY = y;
-        mirrorZ = z;
-        mirrorAngleDeg = angleDeg;
-        mirrorEpoch = epoch;
-        mirrorOn = on;
+        mirror.set(on ? new Mirror(true, x, y, z, angleDeg, epoch) : MIRROR_OFF);
     }
+
+    /**
+     * Wakes every monster that can hear the mirrored player, through the engine's own
+     * P_NoiseAlert. A DOOM weapon does this from inside the engine when it fires; a
+     * Minecraft one is fired outside it, so a bow or a swing has to say so explicitly or
+     * the level stays asleep around a player who is plainly attacking.
+     */
+    public void alertMonsters() {
+        pendingAlert.set(true);
+    }
+
+    /**
+     * Types a cheat into the engine, one key event per character. The engine's own cheat
+     * matcher in the status bar consumes them, so every code the WAD's engine supports works
+     * without this class knowing any of them. Cheats are normally typed during play, which
+     * is impossible here because the keyboard belongs to Minecraft.
+     */
+    public void typeCheat(String code) {
+        for (char c : code.toLowerCase(java.util.Locale.ROOT).toCharArray()) {
+            final g.Signals.ScanCode sc =
+                com.blackwithersteve.lattedoom.DoomKeyMap.forChar(c);
+            if (sc != null) {
+                pendingKeys.add(sc);
+            }
+        }
+    }
+
+    /** Cheat characters waiting to be delivered, one per engine frame so the matcher sees
+     * them as separate presses. */
+    private final java.util.concurrent.ConcurrentLinkedQueue<g.Signals.ScanCode> pendingKeys =
+        new java.util.concurrent.ConcurrentLinkedQueue<>();
+
+    /**
+     * Grants engine inventory to the mirrored player. Every field is the engine's own, so
+     * the status bar, weapon switching and ammunition limits behave exactly as if the items
+     * had been picked up. A negative count means the maximum for that slot.
+     */
+    public void grant(String what, int amount) {
+        pendingGrants.add(new Object[]{what, amount});
+    }
+
+    /** A weapon to select, or null. Posting number keys does not work for this: a down and
+     * up delivered in the same frame arrive in one D_ProcessEvents batch and G_BuildTiccmd
+     * never observes the key, so the switch silently does not happen. */
+    private final java.util.concurrent.atomic.AtomicReference<String> pendingWeapon =
+        new java.util.concurrent.atomic.AtomicReference<>();
+
+    /** Selects a weapon by the names {@link #grant} uses. Applied on the engine thread. */
+    public void selectWeapon(String name) {
+        pendingWeapon.set(name);
+    }
+
+    private final java.util.concurrent.ConcurrentLinkedQueue<Object[]> pendingGrants =
+        new java.util.concurrent.ConcurrentLinkedQueue<>();
+
+    private void applyGrants(doom.DoomMain<?, ?> d) {
+        final var pl = d.players[0];
+        final String want = pendingWeapon.getAndSet(null);
+        if (want != null) {
+            final int wi = weaponIndex(want);
+            if (wi >= 0 && wi < weapontype_t.NUMWEAPONS.ordinal() && pl.weaponowned[wi]) {
+                pl.pendingweapon = weapontype_t.values()[wi];
+            }
+        }
+        Object[] g;
+        while ((g = pendingGrants.poll()) != null) {
+            final String what = (String) g[0];
+            final int n = (Integer) g[1];
+            switch (what) {
+                case "health" -> {
+                    pl.health[0] = Math.min(200, Math.max(1, n));
+                    if (pl.mo != null) {
+                        pl.mo.health = pl.health[0];
+                    }
+                }
+                case "armor" -> {
+                    pl.armorpoints[0] = Math.min(200, Math.max(0, n));
+                    pl.armortype = pl.armorpoints[0] > 100 ? 2 : 1;
+                }
+                case "keys" -> java.util.Arrays.fill(pl.cards, true);
+                case "backpack" -> {
+                    if (!pl.backpack) {
+                        pl.backpack = true;
+                        for (int i = 0; i < pl.maxammo.length; i++) {
+                            pl.maxammo[i] *= 2;
+                        }
+                    }
+                }
+                default -> {
+                    final int wi = weaponIndex(what);
+                    if (wi >= 0) {
+                        pl.weaponowned[wi] = true;
+                    } else {
+                        final int ai = ammoIndex(what);
+                        if (ai >= 0) {
+                            pl.ammo[ai] = n < 0 ? pl.maxammo[ai]
+                                : Math.min(pl.maxammo[ai], Math.max(0, n));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private static int weaponIndex(String name) {
+        return switch (name) {
+            case "fist" -> 0;
+            case "pistol" -> 1;
+            case "shotgun" -> 2;
+            case "chaingun" -> 3;
+            case "rocket" -> 4;
+            case "plasma" -> 5;
+            case "bfg" -> 6;
+            case "chainsaw" -> 7;
+            case "supershotgun" -> 8;
+            default -> -1;
+        };
+    }
+
+    private static int ammoIndex(String name) {
+        return switch (name) {
+            case "bullets" -> 0;
+            case "shells" -> 1;
+            case "cells" -> 2;
+            case "rockets" -> 3;
+            default -> -1;
+        };
+    }
+
+    /**
+     * A shot crossed this line: fire the engine's impact handler. Gun-triggered specials are
+     * normally raised from inside P_LineAttack, which only DOOM weapons run, so a Minecraft
+     * arrow or swing has to raise them explicitly. The engine decides whether the line's
+     * special is shootable at all, so nothing needs classifying here.
+     */
+    public void requestShoot(int lineIdx) {
+        pendingShoot.add(lineIdx);
+    }
+
+    /** Faults already reported by {@link #noteSwallowed}; each site speaks once so a
+     * per-frame failure cannot flood the log. */
+    private final java.util.Set<String> swallowedSeen =
+        java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /**
+     * Records a fault that is deliberately not allowed to propagate. These sites exist so a
+     * single bad frame cannot kill the engine loop, but swallowing them silently leaves no
+     * trail when something is genuinely wrong, which is how a real fault can run for a whole
+     * session unnoticed.
+     */
+    private void noteSwallowed(String where, Throwable t) {
+        if (!swallowedSeen.add(where)) {
+            return;
+        }
+        // The engine thread must not reach Minecraft or Fabric code: the headless harnesses
+        // run this class with no Fabric runtime at all, where the diagnostic writer throws.
+        LOGGER.warn("Latte Doom suppressed a fault in {}", where, t);
+    }
+
+    private final java.util.concurrent.ConcurrentLinkedQueue<Integer> pendingShoot =
+        new java.util.concurrent.ConcurrentLinkedQueue<>();
 
     /** The possessed player crossed a special line: fire the engine's walkover handler. */
     public void requestCross(int lineIdx, int side) {
@@ -923,6 +1158,19 @@ public final class DoomHost {
     /** The possessed player pressed use: run the engine's P_UseLines at their position. */
     public void requestUse() {
         pendingUse.set(true);
+    }
+
+    /** Upward momentum below this is ordinary physics rather than an attack throwing the
+     * player. A_VileAttack gives 1000/mass, which is ten map units per tic for a player. */
+    private static final int LAUNCH_MIN = 4 * 65536;
+
+    private final java.util.concurrent.atomic.AtomicInteger pendingLaunch =
+        new java.util.concurrent.atomic.AtomicInteger();
+
+    /** The largest upward impulse the engine applied to the player since the last drain, in
+     * map units per tic, or zero. */
+    public double drainLaunch() {
+        return pendingLaunch.getAndSet(0) / 65536.0;
     }
 
     /** DOOM hit points taken since the last drain (Minecraft turns them into hearts). */

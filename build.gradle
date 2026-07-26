@@ -111,6 +111,9 @@ tasks.register('arenaProbe', JavaExec) {
 	description = 'Boot the engine on a generated arena and verify a spawned monster thinks.'
 	classpath = sourceSets.main.runtimeClasspath
 	mainClass = 'com.blackwithersteve.lattedoom.harness.ArenaProbe'
+	args = [
+		(project.findProperty('wad') ?: '').toString(),
+	]
 	workingDir = file('run-arena')
 	doFirst { file('run-arena').mkdirs() }
 	ignoreExitValue = true

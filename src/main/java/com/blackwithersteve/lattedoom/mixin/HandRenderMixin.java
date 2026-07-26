@@ -1,6 +1,6 @@
 package com.blackwithersteve.lattedoom.mixin;
 
-import com.blackwithersteve.lattedoom.render.LatteWorld;
+import com.blackwithersteve.lattedoom.render.LatteHud;
 import net.minecraft.client.renderer.ItemInHandRenderer;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -17,7 +17,10 @@ public abstract class HandRenderMixin {
 
     @Inject(method = "submitHandsWithItems", at = @At("HEAD"), cancellable = true)
     private void lattedoom$noSteveHands(CallbackInfo ci) {
-        if (LatteWorld.marineForm()) {
+        // Gated on the DOOM interface being drawable rather than on the form alone, so a
+        // player whose engine is still booting keeps the vanilla hand until the view weapon
+        // has something to draw.
+        if (LatteHud.ready()) {
             ci.cancel();
         }
     }

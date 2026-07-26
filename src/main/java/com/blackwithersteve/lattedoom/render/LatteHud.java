@@ -23,6 +23,19 @@ public final class LatteHud {
 
     private static final Map<String, Identifier> IDS = new HashMap<>();
 
+    /**
+     * Whether the DOOM interface can be drawn. Transforming is instant but the engine boots
+     * on its own thread, and its first snapshot can be seconds away, so this stays false for
+     * a while after the player transforms. Anything that hides Minecraft's own interface has
+     * to consult this rather than the form alone, or the player is left with neither
+     * interface for as long as the boot takes.
+     */
+    public static boolean ready() {
+        return LatteWorld.marineForm()
+            && LatteWorld.suitSnap() != null
+            && LatteWorld.sprites() != null;
+    }
+
     public static void extract(GuiGraphicsExtractor g) {
         if (!LatteWorld.marineForm()) {
             return; // the view weapon belongs to a transformed player only

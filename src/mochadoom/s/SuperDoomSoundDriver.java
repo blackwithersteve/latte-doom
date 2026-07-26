@@ -380,6 +380,10 @@ public class SuperDoomSoundDriver extends AbstractSoundDriver {
             audiochunks.offer(chunk);
         }
 
+        /** Latte Doom patch: how many chunks of audio may sit queued ahead of playback.
+         * Each is one SND_FRAME_RATE frame, so two is under a tenth of a second. */
+        private static final int LATTE_MAX_BACKLOG = 2;
+
         public volatile int currstate = 0;
 
         public void run() {
@@ -406,6 +410,26 @@ public class SuperDoomSoundDriver extends AbstractSoundDriver {
                 // Play back only at most a given number of chunks once you reach
                 // this spot.
                 
+                // Latte Doom patch: bound the backlog. Chunks are produced once per engine
+                // tic and consumed in real time, so a burst that outruns real time, such as
+                // the engine catching up on tics across a level load, fills this queue and
+                // the audio line behind it. Neither drains again, because the producer then
+                // matches the consumer, so every sound from that point on plays late by the
+                // whole buffered depth, which is up to about a second. Stale chunks are
+                // dropped and the line is flushed instead, which keeps playback current at
+                // the cost of a fraction of a second of audio at the moment of the burst.
+                if (audiochunks.size() > LATTE_MAX_BACKLOG) {
+                    while (audiochunks.size() > LATTE_MAX_BACKLOG) {
+                        final AudioChunk stale = audiochunks.poll();
+                        if (stale == null) {
+                            break;
+                        }
+                        stale.free = true;
+                        audiochunkpool.checkIn(stale);
+                    }
+                    auline.flush();
+                }
+
                 int atMost=Math.min(ISoundDriver.BUFFER_CHUNKS,audiochunks.size());
                 
                 while (atMost-->0){

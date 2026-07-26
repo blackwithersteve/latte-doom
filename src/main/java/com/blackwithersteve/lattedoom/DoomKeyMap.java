@@ -136,5 +136,18 @@ public final class DoomKeyMap {
         return MAP.get(glfwKey);
     }
 
+    /** The scan code for a letter or digit, used when a cheat is typed into the engine one
+     * character at a time. Null for anything else, which the caller skips rather than
+     * mistypes. */
+    public static ScanCode forChar(char c) {
+        if (c >= 'a' && c <= 'z') {
+            return MAP.get(GLFW.GLFW_KEY_A + (c - 'a'));
+        }
+        if (c >= '0' && c <= '9') {
+            return MAP.get(GLFW.GLFW_KEY_0 + (c - '0'));
+        }
+        return null;
+    }
+
     private DoomKeyMap() {}
 }

@@ -37,6 +37,15 @@ public final class LatteDoomConfig {
     public int doomSkill = 3;
     /** Whether right-clicking a block item against the drawn level places a real block. */
     public boolean placeBlocks = true;
+    /** DOOM hit points awarded per point of Minecraft attack damage on a melee swing.
+     * The plain inverse of the health conversion would be 5.0; the default is higher so
+     * Minecraft weapons stay competitive with DOOM ones. Attack damage already encodes the
+     * weapon tier, so every weapon scales from this one number. */
+    public double meleeScale = 18.0;
+    /** Which of the engine's sound drivers to boot with: {@code super} (its default, a
+     * software mixer), {@code classic}, {@code clip}, {@code audiolines}, or {@code none}.
+     * They differ in how they reach the audio device and therefore in latency. */
+    public String soundDriver = "super";
     /** Extra WADs merged on top of the IWAD, in load order (SIGIL, custom maps...). */
     public final List<Path> pwads = new ArrayList<>();
 
@@ -76,6 +85,14 @@ public final class LatteDoomConfig {
         cfg.novert = Boolean.parseBoolean(props.getProperty("novert", "true"));
         cfg.pauseMinecraft = Boolean.parseBoolean(props.getProperty("pause-minecraft", "true"));
         cfg.placeBlocks = Boolean.parseBoolean(props.getProperty("place-blocks", "true"));
+        try {
+            cfg.meleeScale = Math.max(1.0, Math.min(100.0,
+                Double.parseDouble(props.getProperty("melee-scale", "18.0"))));
+        } catch (NumberFormatException ignored) {
+            cfg.meleeScale = 18.0;
+        }
+        cfg.soundDriver = props.getProperty("sound-driver", "super")
+            .trim().toLowerCase(java.util.Locale.ROOT);
         cfg.doomSfxVolume = parseVol(props.getProperty("doom-sfx-volume", "1.0"));
         cfg.doomMusicVolume = parseVol(props.getProperty("doom-music-volume", "1.0"));
         try {
@@ -96,6 +113,8 @@ public final class LatteDoomConfig {
         props.setProperty("novert", Boolean.toString(cfg.novert));
         props.setProperty("pause-minecraft", Boolean.toString(cfg.pauseMinecraft));
         props.setProperty("place-blocks", Boolean.toString(cfg.placeBlocks));
+        props.setProperty("melee-scale", Double.toString(cfg.meleeScale));
+        props.setProperty("sound-driver", cfg.soundDriver);
         props.setProperty("doom-sfx-volume", Float.toString(cfg.doomSfxVolume));
         props.setProperty("doom-music-volume", Float.toString(cfg.doomMusicVolume));
         props.setProperty("doom-skill", Integer.toString(cfg.doomSkill));
@@ -166,6 +185,7 @@ public final class LatteDoomConfig {
      * {@code PWAD}, and carries the {@code PLAYPAL} palette. Both tests are required: the
      * palette test alone is not sufficient, because large total-conversion
      * PWADs ship their own PLAYPAL and would pass it, yet fail to boot as a base WAD.
+     * At least one map lump is required as well, so that resource WADs are not accepted.
      * Only the header and directory are read, which is cheap enough for validating
      * command input. */
     public static boolean isIwadFile(Path p) {
@@ -186,16 +206,37 @@ public final class LatteDoomConfig {
             f.seek(dirOfs);
             final byte[] dir = new byte[Math.min(num * 16, (int) (f.length() - dirOfs))];
             f.readFully(dir);
+            // A base WAD needs a palette and at least one level. A resource or texture WAD
+            // carries a palette and no maps, and accepting one lets the engine boot and then
+            // die inside P_SetupLevel with a fatal error the player cannot interpret.
+            boolean palette = false;
+            boolean levels = false;
             for (int i = 0; i + 16 <= dir.length; i += 16) {
                 if (dir[i + 8] == 'P' && dir[i + 9] == 'L' && dir[i + 10] == 'A'
                     && dir[i + 11] == 'Y' && dir[i + 12] == 'P' && dir[i + 13] == 'A'
                     && dir[i + 14] == 'L') {
+                    palette = true;
+                }
+                if (isMapMarker(dir, i + 8)) {
+                    levels = true;
+                }
+                if (palette && levels) {
                     return true;
                 }
             }
         } catch (Exception ignored) {
         }
         return false;
+    }
+
+    /** An ExMy or MAPxx marker at this offset in the directory entry. */
+    private static boolean isMapMarker(byte[] d, int o) {
+        if (d[o] == 'E' && d[o + 1] >= '1' && d[o + 1] <= '9'
+            && d[o + 2] == 'M' && d[o + 3] >= '1' && d[o + 3] <= '9') {
+            return true;
+        }
+        return d[o] == 'M' && d[o + 1] == 'A' && d[o + 2] == 'P'
+            && d[o + 3] >= '0' && d[o + 3] <= '9' && d[o + 4] >= '0' && d[o + 4] <= '9';
     }
 
     private static Path scanForIwad(Path dir) {

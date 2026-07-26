@@ -2128,6 +2128,11 @@ public class DoomMain<T, V> extends DoomStatus<T, V> implements IDoomGameNetwork
      */
     @SourceCode.Compatible
     @G_Game.C(G_InitNew)
+    /** Latte Doom patch: whether the shared state and mobjinfo tables currently hold the
+     * fast-monster values. They are static and survive an engine restart, so the flag has to
+     * as well. */
+    private static boolean TABLES_ARE_FAST;
+
     public void InitNew(skill_t skill, int episode, int map) { InitNew(skill, episode, map, false); }
     private void InitNew(skill_t skill, int episode, int map, boolean noSwitchRandom) {
         if (paused) { 
@@ -2194,7 +2199,15 @@ public class DoomMain<T, V> extends DoomStatus<T, V> implements IDoomGameNetwork
         respawnmonsters = skill == skill_t.sk_nightmare || respawnparm;
 
         // If on nightmare/fast monsters make everything MOAR pimp.
-        if (fastparm || (skill == skill_t.sk_nightmare && gameskill != skill_t.sk_nightmare) ) { 
+        // Latte Doom patch: base the fast-monster switch on whether the tables hold their
+        // fast values, not on this instance's previous skill. The tables are static and
+        // outlive an engine restart within the same JVM, which this port performs on every
+        // warp, so a fresh engine always reports a non-nightmare gameskill and the restore
+        // below would never run, leaving every later game with halved demon tics and
+        // 20-unit fireballs for the life of the process.
+        final boolean wantFast = fastparm || skill == skill_t.sk_nightmare;
+        if (wantFast && !TABLES_ARE_FAST) {
+            TABLES_ARE_FAST = true;
             for (int i = statenum_t.S_SARG_RUN1.ordinal(); i <= statenum_t.S_SARG_PAIN2.ordinal(); i++) {
                 states[i].tics >>= 1;
             }
@@ -2202,7 +2215,8 @@ public class DoomMain<T, V> extends DoomStatus<T, V> implements IDoomGameNetwork
             mobjinfo[mobjtype_t.MT_BRUISERSHOT.ordinal()].speed = 20 * MAPFRACUNIT;
             mobjinfo[mobjtype_t.MT_HEADSHOT.ordinal()].speed = 20 * MAPFRACUNIT;
             mobjinfo[mobjtype_t.MT_TROOPSHOT.ordinal()].speed = 20 * MAPFRACUNIT;
-        } else if (skill != skill_t.sk_nightmare && gameskill == skill_t.sk_nightmare) {
+        } else if (!wantFast && TABLES_ARE_FAST) {
+            TABLES_ARE_FAST = false;
             for (int i = statenum_t.S_SARG_RUN1.ordinal(); i <= statenum_t.S_SARG_PAIN2.ordinal(); i++) {
                 states[i].tics <<= 1;
             }
@@ -2617,6 +2631,10 @@ public class DoomMain<T, V> extends DoomStatus<T, V> implements IDoomGameNetwork
         // A broken patch must not stop the boot; in the worst case the tables stay vanilla.
         try {
             deh.DehLoader.applyWadDehLumps(this);
+            // Latte Doom patch: the patch loader writes absolute values into states[].tics
+            // and mobjinfo[].speed, which undoes any fast-monster mutation still recorded in
+            // TABLES_ARE_FAST. The flag describes those tables, so it has to follow them.
+            TABLES_ARE_FAST = false;
         } catch (Throwable t) {
             System.err.println("[lattedoom-deh] DEHACKED application failed, continuing vanilla: " + t);
         }

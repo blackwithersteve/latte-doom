@@ -182,10 +182,36 @@ public final class LatteNet {
         }
     }
 
+    /** No level has this many sectors or objects, and a decoder must never size an
+     * allocation from a number a client chose. Reading is abandoned past these. */
+    private static final int MAX_WIRE_SECTORS = 65536;
+    private static final int MAX_WIRE_MOBJS = 32768;
+    private static final int MAX_WIRE_BODIES = 64;
+
+    /** A packet whose declared counts are impossible, or which claims more content than the
+     * bytes that arrived could hold. Decoding stops rather than allocating on trust. */
+    private static final class BadSnapshot extends RuntimeException {
+        BadSnapshot(String why) {
+            super(why, null, false, false);
+        }
+    }
+
+    /** Rejects a declared element count that is negative, implausibly large, or larger than
+     * the remaining bytes could encode. The readable-bytes test is what makes this safe: it
+     * bounds the allocation by the packet that arrived, so no count can ask for more memory
+     * than the sender was willing to pay to send. */
+    private static int wireCount(RegistryFriendlyByteBuf buf, int n, int max, int minBytesEach,
+                                 String what) {
+        if (n < 0 || n > max || (minBytesEach > 0 && n > buf.readableBytes() / minBytesEach)) {
+            throw new BadSnapshot(what + " count " + n + " is not plausible");
+        }
+        return n;
+    }
+
     private static com.blackwithersteve.lattedoom.engine.WorldSnapshot readSnap(RegistryFriendlyByteBuf buf) {
         final var s = com.blackwithersteve.lattedoom.engine.WorldSnapshot.forRemote();
         s.tic = buf.readVarInt();
-        final int n = buf.readVarInt();
+        final int n = wireCount(buf, buf.readVarInt(), MAX_WIRE_SECTORS, 5, "sector");
         s.floorH = new double[n];
         s.ceilH = new double[n];
         s.light = new short[n];
@@ -196,7 +222,7 @@ public final class LatteNet {
             s.ceilH[i] = buf.readShort();
             s.light[i] = (short) buf.readUnsignedByte();
         }
-        final int rb = buf.readVarInt();
+        final int rb = wireCount(buf, buf.readVarInt(), MAX_WIRE_BODIES, 20, "remote body");
         if (rb > 0) {
             s.rbUuidMost = new long[rb];
             s.rbUuidLeast = new long[rb];
@@ -207,7 +233,7 @@ public final class LatteNet {
                 s.rbMobjId[i] = buf.readInt();
             }
         }
-        final int m = buf.readVarInt();
+        final int m = wireCount(buf, buf.readVarInt(), MAX_WIRE_MOBJS, 12, "object");
         s.mobjCount = m;
         s.playerMobj = buf.readVarInt();
         s.mx = new double[m];
@@ -373,8 +399,10 @@ public final class LatteNet {
 
     /** Client → server: the engine dealt damage or healing to this Minecraft player. Sent
      * by the engine-owning client and applied by the server, which is required for LAN
-     * guests: the integrated-server shortcut is null off the host and drops the damage. */
-    public record PlayerDamageC2S(UUID target, int dmgHp, int healHp, double kx, double kz)
+     * guests: the integrated-server shortcut is null off the host and drops the damage.
+     * The blocked flag reports that the sending client saw a raised shield facing the hit. */
+    public record PlayerDamageC2S(UUID target, int dmgHp, int healHp, double kx, double kz,
+                                  boolean blocked)
         implements CustomPacketPayload {
         public static final Type<PlayerDamageC2S> TYPE =
             new Type<>(Identifier.fromNamespaceAndPath("lattedoom", "pdmg_c2s"));
@@ -384,6 +412,7 @@ public final class LatteNet {
                 ByteBufCodecs.VAR_INT, PlayerDamageC2S::healHp,
                 ByteBufCodecs.DOUBLE, PlayerDamageC2S::kx,
                 ByteBufCodecs.DOUBLE, PlayerDamageC2S::kz,
+                ByteBufCodecs.BOOL, PlayerDamageC2S::blocked,
                 PlayerDamageC2S::new);
 
         @Override
@@ -550,6 +579,57 @@ public final class LatteNet {
      * pickups stay well under the cap. */
     private static final java.util.Map<UUID, long[]> HEAL_WINDOW =
         new java.util.concurrent.ConcurrentHashMap<>();
+    /** How far a self-teleport may move a player outside the level dimension. Covers the
+     * delivery into a level and the return from one, and nothing else. */
+    private static final double TELEPORT_MAX_HOP = 64.0;
+
+    /** A map lump name as the engine writes them: ExMy or MAPxx, letters and digits only. */
+    private static final java.util.regex.Pattern MAP_NAME =
+        java.util.regex.Pattern.compile("[A-Za-z0-9_]{1,32}");
+
+    private static boolean finite(double v) {
+        return Double.isFinite(v) && Math.abs(v) < 3.0e7;
+    }
+
+    /** Scavenge packets honoured per player per rolling second. Walking over items cannot
+     * produce anywhere near this; a flood can. */
+    private static final int SCAVENGE_CAP_PER_SEC = 12;
+    private static final java.util.Map<UUID, long[]> scavWindow =
+        new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * Blocks players have placed inside the level dimension. That dimension persists across
+     * level loads and each level is raised at its own origin, so without this the previous
+     * map's blocks are left floating in the empty world around the new one.
+     */
+    private static final java.util.Set<net.minecraft.core.BlockPos> placedBlocks =
+        java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /** Removes every block placed inside the level dimension. */
+    private static void clearPlacedBlocks(net.minecraft.server.MinecraftServer server) {
+        if (placedBlocks.isEmpty()) {
+            return;
+        }
+        final net.minecraft.server.level.ServerLevel lvl = server.getLevel(DOOM_LEVEL_DIM);
+        if (lvl != null) {
+            for (net.minecraft.core.BlockPos p : placedBlocks) {
+                if (!lvl.getBlockState(p).isAir()) {
+                    lvl.setBlock(p, net.minecraft.world.level.block.Blocks.AIR.defaultBlockState(), 3);
+                }
+            }
+        }
+        placedBlocks.clear();
+    }
+
+    /** How far from a raised level's origin an entry may land, in blocks. */
+    private static final double LEVEL_ENTRY_RADIUS = 512.0;
+
+    /** Engine hit points a single player may take per rolling second. The simulation cannot
+     * deal anything near this in a second of tics; a modified client can. */
+    private static final int DMG_CAP_PER_SEC = 700;
+    private static final java.util.Map<UUID, long[]> dmgWindow =
+        new java.util.concurrent.ConcurrentHashMap<>();
+
     private static final int HEAL_CAP_PER_SEC = 200; // DOOM HP per second (/5 = MC half-hearts)
 
     /** The base WAD this side has, from the client's own scan; set at client init. */
@@ -591,10 +671,33 @@ public final class LatteNet {
         ServerPlayNetworking.registerGlobalReceiver(LevelC2S.TYPE, (payload, context) -> {
             final ServerPlayer who = context.player();
             if (payload.up()) {
-                // Last writer wins: the most recent client to raise a level owns it
-                serverLevel = new LevelS2C(payload.map(), payload.ox(), payload.oy(),
+                // Ownership is the authorisation token for the damage, snapshot, sound and
+                // presence lanes, so claiming it has to be validated like any other
+                // privileged action rather than granted to whoever asks last.
+                final String map = payload.map();
+                if (map.isEmpty() || map.length() > 32 || !MAP_NAME.matcher(map).matches()) {
+                    return; // a raised level names a real map lump
+                }
+                if (!finite(payload.ox()) || !finite(payload.oy()) || !finite(payload.oz())) {
+                    return; // the origin is broadcast to every client and drives their meshes
+                }
+                if (who.isSpectator()) {
+                    return;
+                }
+                // Taking over another player's level is a supported flow, and it happens
+                // both from inside the level, when a spectator loads their own, and from
+                // the overworld, when an ordinary warp lands while someone else owns one.
+                // Neither case can be refused without breaking a normal path, so ownership
+                // is granted once the checks above pass, and the privileged lanes it
+                // unlocks are guarded on their own terms instead.
+                final LevelS2C before = serverLevel;
+                serverLevel = new LevelS2C(map, payload.ox(), payload.oy(),
                     payload.oz(), true, who.getUUID());
                 serverLevelOwner = who.getUUID();
+                if (before == null || !before.map().equals(map)
+                    || before.ox() != payload.ox() || before.oz() != payload.oz()) {
+                    clearPlacedBlocks(context.server()); // a different level stands here now
+                }
             } else {
                 // Only the current owner may take the level down, so a second client's
                 // engine cannot remove the level everyone is standing in
@@ -603,6 +706,7 @@ public final class LatteNet {
                 }
                 serverLevel = null;
                 serverLevelOwner = null;
+                clearPlacedBlocks(context.server());
             }
             for (ServerPlayer p : PlayerLookup.all(context.server())) {
                 if (ServerPlayNetworking.canSend(p, LevelS2C.TYPE)) {
@@ -682,7 +786,46 @@ public final class LatteNet {
             if (sp == null || sp.getAbilities().invulnerable || sp.isSpectator()) {
                 return;
             }
+            // Engine damage is only meaningful for a participant in the level. Without this
+            // check the level owner can damage any player on the server, in any dimension,
+            // at any distance.
+            if (!sender.equals(payload.target())
+                && !sp.level().dimension().equals(DOOM_LEVEL_DIM)) {
+                return;
+            }
+            // Rate-cap per target over a rolling second, the same shape as the heal cap.
+            // Genuine engine damage is bounded by what the simulation can deal in a second
+            // of tics; a flood of forged packets is not.
             if (payload.dmgHp() > 0) {
+                final long nowTick = context.server().getTickCount();
+                final long[] w = dmgWindow.computeIfAbsent(payload.target(),
+                    k -> new long[]{nowTick, 0});
+                if (nowTick - w[0] >= 20L) {
+                    w[0] = nowTick;
+                    w[1] = 0;
+                }
+                if (w[1] >= DMG_CAP_PER_SEC) {
+                    return;
+                }
+                w[1] += payload.dmgHp();
+            }
+            if (payload.dmgHp() > 0 && payload.blocked() && sp.isBlocking()) {
+                // A raised shield facing the hit absorbs it. The client works out the arc
+                // from the engine's knockback vector, because engine damage has no attacker
+                // entity for Minecraft's own blocking test to read, and the server confirms
+                // the shield is up before honouring the claim.
+                sp.level().playSound(null, sp.getX(), sp.getY(), sp.getZ(),
+                    net.minecraft.sounds.SoundEvents.SHIELD_BLOCK,
+                    net.minecraft.sounds.SoundSource.PLAYERS, 1.0f, 0.8f + 0.4f * sp.getRandom().nextFloat());
+                final var shield = sp.getUseItem();
+                if (!shield.isEmpty() && payload.dmgHp() >= 15) {
+                    shield.hurtAndBreak(1, sp, net.minecraft.world.entity.EquipmentSlot.OFFHAND);
+                }
+                if (payload.kx() != 0 || payload.kz() != 0) {
+                    sp.push(payload.kx() * 0.3, 0.1, payload.kz() * 0.3);
+                    sp.hurtMarked = true;
+                }
+            } else if (payload.dmgHp() > 0) {
                 sp.invulnerableTime = 0; // DOOM has no invulnerability frames
                 // Magic damage rather than generic. The engine has already applied skill
                 // scaling, armour absorption and its own randomisation, so Minecraft armour
@@ -720,6 +863,20 @@ public final class LatteNet {
             if (sp == null || sp.isSpectator()) {
                 return;
             }
+            // The per-packet clamps bound a single pickup but not a flood of them, so a
+            // rolling budget bounds the rate as well. Genuine scavenging stays far under it,
+            // since the engine only hands over items the player walked onto.
+            final long nowTick = context.server().getTickCount();
+            final long[] w = scavWindow.computeIfAbsent(sp.getUUID(),
+                k -> new long[]{nowTick, 0});
+            if (nowTick - w[0] >= 20L) {
+                w[0] = nowTick;
+                w[1] = 0;
+            }
+            if (w[1] >= SCAVENGE_CAP_PER_SEC) {
+                return;
+            }
+            w[1]++;
             final int heal = Math.max(0, Math.min(80, payload.healHp()));
             final int food = Math.max(0, Math.min(20, payload.foodPts()));
             final int count = Math.max(0, Math.min(64, payload.count()));
@@ -774,6 +931,7 @@ public final class LatteNet {
             }
             final var state = bi.getBlock().defaultBlockState();
             lvl.setBlock(pos, state, 3);
+            placedBlocks.add(pos.immutable());
             final var snd = state.getSoundType();
             lvl.playSound(null, pos, snd.getPlaceSound(),
                 net.minecraft.sounds.SoundSource.BLOCKS,
@@ -790,7 +948,20 @@ public final class LatteNet {
                 || Math.abs(x) > 3.0e7 || Math.abs(z) > 3.0e7 || y < -1024 || y > 2048) {
                 return;
             }
-            context.player().teleportTo(x, y, z);
+            final ServerPlayer tp = context.player();
+            if (tp.isSpectator()) {
+                return;
+            }
+            // A self-teleport is only legitimate as part of a level session. Inside the
+            // level dimension it may go anywhere, since a warp crosses a whole map; in any
+            // other world it is capped to a short hop, which covers the delivery into a
+            // level and the return from one. Without this a modified client could send a
+            // single packet and travel anywhere on a shared server.
+            if (!tp.level().dimension().equals(DOOM_LEVEL_DIM)
+                && tp.distanceToSqr(x, y, z) > TELEPORT_MAX_HOP * TELEPORT_MAX_HOP) {
+                return;
+            }
+            tp.teleportTo(x, y, z);
         });
         ServerPlayNetworking.registerGlobalReceiver(EnterLevelDimC2S.TYPE, (payload, context) -> {
             final double x = payload.x(), y = payload.y(), z = payload.z();
@@ -799,6 +970,22 @@ public final class LatteNet {
                 return;
             }
             final ServerPlayer p = context.player();
+            if (p.isSpectator()) {
+                return;
+            }
+            // Bound the destination to a raised level when there is one. A suit boot raises
+            // its map without announcing it, and /doomstart sends this packet before the
+            // announcement, so requiring a raised level here would refuse the first entry.
+            // When no level is known, the hop is bounded like an ordinary self-teleport.
+            final LevelS2C live = serverLevel;
+            if (live != null) {
+                if (Math.abs(x - live.ox()) > LEVEL_ENTRY_RADIUS
+                    || Math.abs(z - live.oz()) > LEVEL_ENTRY_RADIUS) {
+                    return; // a level start is near its own origin
+                }
+            } else if (p.distanceToSqr(x, y, z) > LEVEL_ENTRY_RADIUS * LEVEL_ENTRY_RADIUS) {
+                return;
+            }
             final net.minecraft.server.level.ServerLevel target =
                 context.server().getLevel(DOOM_LEVEL_DIM);
             if (target == null) {
@@ -810,6 +997,16 @@ public final class LatteNet {
             p.teleportTo(target, x, y, z, java.util.Set.of(), p.getYRot(), p.getXRot(), false);
         });
         ServerPlayNetworking.registerGlobalReceiver(LeaveLevelDimC2S.TYPE, (payload, context) -> {
+            // Only meaningful from inside the level dimension. Anywhere else it is a free
+            // teleport under a different name.
+            if (!context.player().level().dimension().equals(DOOM_LEVEL_DIM)) {
+                return;
+            }
+            // The destination is a remembered overworld position, not a free choice. Bound
+            // it to the world border so this cannot become a long-range teleport.
+            if (!finite(payload.x()) || !finite(payload.y()) || !finite(payload.z())) {
+                return;
+            }
             final double x = payload.x(), y = payload.y(), z = payload.z();
             if (!Double.isFinite(x) || !Double.isFinite(y) || !Double.isFinite(z)
                 || Math.abs(x) > 3.0e7 || Math.abs(z) > 3.0e7 || y < -1024 || y > 2048) {
@@ -821,6 +1018,14 @@ public final class LatteNet {
         });
         ServerPlayNetworking.registerGlobalReceiver(DoomHitC2S.TYPE, (payload, context) -> {
             if (payload.damageHp() <= 0 || payload.damageHp() > 200) {
+                return;
+            }
+            // Damage is routed into another client's engine, so the sender has to be a
+            // participant: in the level dimension, alive and not spectating. Otherwise any
+            // client could drive the level owner's engine from the overworld.
+            final ServerPlayer hitter = context.player();
+            if (hitter.isSpectator() || !hitter.isAlive()
+                || !hitter.level().dimension().equals(DOOM_LEVEL_DIM)) {
                 return;
             }
             // Retire a spent arrow
@@ -867,8 +1072,21 @@ public final class LatteNet {
                 ServerPlayNetworking.send(handler.player, level);
             }
         });
+        // A block the player breaks no longer needs clearing, and leaving it recorded grows
+        // the set for the whole session and can carry a position into the next world.
+        net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents.AFTER.register(
+            (world, player, pos, state, entity) -> {
+                if (world.dimension().equals(DOOM_LEVEL_DIM)) {
+                    placedBlocks.remove(pos);
+                }
+            });
         ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
             final UUID gone = handler.player.getUUID();
+            // The rate windows are keyed by player and would otherwise keep an entry for
+            // every account that has ever connected.
+            dmgWindow.remove(gone);
+            scavWindow.remove(gone);
+            HEAL_WINDOW.remove(gone);
             if (MarineRoster.SERVER.remove(gone)) {
                 broadcast(server, new FormS2C(gone, false));
             }
@@ -901,19 +1119,23 @@ public final class LatteNet {
             if (mine == null) {
                 // The mod ships no id Software assets; each client supplies its own
                 player.sendSystemMessage(net.minecraft.network.chat.Component.literal(
-                    "§cLatte Doom won't work here: you have no game data.§r This world runs"
-                    + " Latte Doom, a source port: the levels, textures and sounds come from a"
-                    + " DOOM or DOOM II WAD, which the mod does not include. You need your own"
-                    + " §eDOOM.WAD§r or §eDOOM2.WAD§r (e.g. from Steam or GOG) in"
-                    + " §econfig/latte-doom/§r, then rejoin."));
+                    "§6Latte Doom§r runs on this world, but you have no game data."
+                    + " It is a source port, so the levels, textures and sounds come from a"
+                    + " DOOM or DOOM II WAD and none of it ships with the mod."));
+                player.sendSystemMessage(net.minecraft.network.chat.Component.literal(
+                    "Put §eDOOM.WAD§r or §eDOOM2.WAD§r, from Steam, GOG or your own disc,"
+                    + " into §econfig/latte-doom/§r and rejoin. Type §e/lattedoom§r for the"
+                    + " command list."));
                 return;
             }
             final String host = payload.hostIwad();
             if (!host.isEmpty() && !host.equalsIgnoreCase(mine.getFileName().toString())) {
                 player.sendSystemMessage(net.minecraft.network.chat.Component.literal(
-                    "§6Latte Doom§r: heads-up: the host runs §e" + host + "§r, you have §e"
-                    + mine.getFileName() + "§r. Everything is composited from YOUR wad, so"
-                    + " art/levels may differ: use the same WAD for an identical game."));
+                    "§6Latte Doom§r: the host is playing §e" + host + "§r and you have §e"
+                    + mine.getFileName() + "§r. Everything you see is built from your own"
+                    + " copy, so maps and artwork can differ, and a map the host loads that"
+                    + " yours does not contain will not appear for you. Use the same WAD to"
+                    + " see the same game."));
             }
         });
         ClientPlayNetworking.registerGlobalReceiver(LevelS2C.TYPE, (payload, context) -> {
@@ -998,9 +1220,10 @@ public final class LatteNet {
 
     /** The engine damaged or healed a Minecraft player; routed through the server. */
     public static void sendPlayerDamage(UUID target, int dmgHp, int healHp,
-                                        double kx, double kz) {
+                                        double kx, double kz, boolean blocked) {
         if (Minecraft.getInstance().getConnection() != null) {
-            ClientPlayNetworking.send(new PlayerDamageC2S(target, dmgHp, healHp, kx, kz));
+            ClientPlayNetworking.send(
+                new PlayerDamageC2S(target, dmgHp, healHp, kx, kz, blocked));
         }
     }
 

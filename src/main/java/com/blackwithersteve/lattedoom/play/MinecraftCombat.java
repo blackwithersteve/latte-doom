@@ -31,13 +31,81 @@ public final class MinecraftCombat {
 
     /**
      * DOOM hit points awarded per point of Minecraft attack damage for a melee swing
-     * against a monster. The strict inverse of the health conversion would be 5.0; this
-     * higher value is a deliberate balance choice, so that Minecraft melee is competitive
-     * with DOOM weapons. Because attack damage already encodes the weapon tier, every
-     * weapon scales from it: a wooden or golden sword deals 48, stone 60, iron 72, which
-     * kills an imp outright, diamond 84 and netherite 96, with axes higher still.
+     * against a monster, used when no configuration has loaded. The strict inverse of the
+     * health conversion would be 5.0; this higher value is a deliberate balance choice, so
+     * that Minecraft melee is competitive with DOOM weapons. Because attack damage already
+     * encodes the weapon tier, every weapon scales from it: at this default a wooden or
+     * golden sword deals 72, stone 90, iron 108, which kills an imp outright, diamond 126
+     * and netherite 144, with axes higher still.
      */
-    private static final double MELEE_DOOM_SCALE = 12.0;
+    private static final double MELEE_DOOM_SCALE_DEFAULT = 18.0;
+
+    /** The configured scale, or the default when no config has loaded yet. */
+    private static double meleeScale() {
+        final var cfg = com.blackwithersteve.lattedoom.LatteDoomClient.config();
+        return cfg != null ? cfg.meleeScale : MELEE_DOOM_SCALE_DEFAULT;
+    }
+
+    /**
+     * Wakes the monsters within earshot of the player. The engine raises this itself
+     * whenever a DOOM weapon fires, so only Minecraft attacks, which happen outside the
+     * engine, have to announce themselves. Without it a level stays asleep around a player
+     * firing a bow across a room.
+     */
+    public static void alertMonsters() {
+        final var host = com.blackwithersteve.lattedoom.LatteDoomClient.host();
+        if (host != null && LatteWorld.playMode()) {
+            host.alertMonsters();
+        }
+    }
+
+    /**
+     * Raises any gun-triggered line special the shot crosses, taking the nearest line
+     * first, as {@code P_LineAttack} does. Only DOOM weapons run through the engine's own
+     * attack code, so a Minecraft arrow or swing would otherwise pass straight through a
+     * shootable switch.
+     */
+    public static void shootSpecials(Vec3 from, Vec3 dir, double rangeU) {
+        final var host = com.blackwithersteve.lattedoom.LatteDoomClient.host();
+        final com.blackwithersteve.lattedoom.render.DoomMap map = LatteWorld.map();
+        if (host == null || map == null || !LatteWorld.playMode()) {
+            return;
+        }
+        final double ox = LatteWorld.worldToDoomX(from.x);
+        final double oy = LatteWorld.worldToDoomY(from.z);
+        final double ex = ox + dir.x * rangeU;
+        final double ey = oy - dir.z * rangeU;
+        int best = -1;
+        double bestT = Double.MAX_VALUE;
+        for (int i = 0; i < map.lines.size(); i++) {
+            final com.blackwithersteve.lattedoom.render.DoomMap.Line l = map.lines.get(i);
+            if (l.special() == 0) {
+                continue;
+            }
+            final double t = segmentHit(ox, oy, ex, ey, l);
+            if (t >= 0 && t < bestT) {
+                bestT = t;
+                best = i;
+            }
+        }
+        if (best >= 0) {
+            host.requestShoot(best);
+        }
+    }
+
+    /** Where along (ax,ay)->(bx,by) the linedef is crossed, or -1 when it is not. */
+    private static double segmentHit(double ax, double ay, double bx, double by,
+                                     com.blackwithersteve.lattedoom.render.DoomMap.Line l) {
+        final double rx = bx - ax, ry = by - ay;
+        final double sx = l.x2() - l.x1(), sy = l.y2() - l.y1();
+        final double den = rx * sy - ry * sx;
+        if (Math.abs(den) < 1.0e-9) {
+            return -1;
+        }
+        final double t = ((l.x1() - ax) * sy - (l.y1() - ay) * sx) / den;
+        final double u = ((l.x1() - ax) * ry - (l.y1() - ay) * rx) / den;
+        return t >= 0 && t <= 1 && u >= 0 && u <= 1 ? t : -1;
+    }
 
     /** Handles an attack that hit no Minecraft entity by testing the DOOM map objects
      * under the crosshair. Returns true if one of them took the hit. */
@@ -54,11 +122,21 @@ public final class MinecraftCombat {
         final Vec3 dir = p.getLookAngle();
         final int target = rayMobj(s, eye, dir, MELEE_REACH_U);
         if (target < 0) {
+            // A swing that hits no monster can still reach a wall, and a shootable switch
+            // on that wall has to be raised. The noise carries either way.
+            alertMonsters();
+            shootSpecials(eye, dir, MELEE_REACH_U);
             return false;
         }
         final double mcDamage = p.getAttributeValue(Attributes.ATTACK_DAMAGE)
             * Math.max(0.2, p.getAttackStrengthScale(0.5f));
-        final int doomHp = Math.max(1, (int) Math.round(mcDamage * MELEE_DOOM_SCALE));
+        alertMonsters();
+        shootSpecials(eye, dir, MELEE_REACH_U);
+        // Clamped to the server's per-hit ceiling. An over-cap packet is rejected whole
+        // rather than trimmed, so without the clamp a high tier weapon under a strength
+        // effect would land for nothing at all.
+        final int doomHp = Math.max(1,
+            Math.min(200, (int) Math.round(mcDamage * meleeScale())));
         LOGGER.info("MC->DOOM: melee hit mobj {} for {} hp", s.mId[target], doomHp);
         com.blackwithersteve.lattedoom.net.LatteNet.sendDoomHit(s.mId[target], doomHp, -1);
         return true;
@@ -96,12 +174,22 @@ public final class MinecraftCombat {
             // inside the level as an impact.
             if (hitsGeometry(from, from.add(vel))) {
                 arrowsSpent.add(e.getId());
+                // An arrow striking a wall raises any gun-triggered special on it, the same
+                // as a hitscan would.
+                shootSpecials(from, vel.normalize(), vel.length() * LatteWorld.UNITS * 1.5);
                 LOGGER.info("MC->DOOM: arrow {} hit level geometry", e.getId());
                 com.blackwithersteve.lattedoom.net.LatteNet.sendDoomHit(-1, 1, e.getId());
             }
         }
-        if (arrowsSpent.size() > 64) {
-            arrowsSpent.clear(); // entity ids recycle slowly, so a periodic clear suffices
+        // Forget an arrow once it no longer exists, rather than clearing the whole set on a
+        // size threshold. Clearing wholesale forgets arrows that are still in flight and
+        // already counted, which lets one of them deal its damage a second time.
+        arrowsSpent.removeIf(id -> {
+            final var e = mc.level.getEntity(id);
+            return e == null || !e.isAlive();
+        });
+        if (arrowsSpent.size() > 512) {
+            arrowsSpent.clear(); // backstop only; the sweep above should keep it small
         }
     }
 
@@ -133,6 +221,11 @@ public final class MinecraftCombat {
         }
         int best = -1;
         double bestT = Double.MAX_VALUE;
+        // Aim at the drawn position rather than the newest engine one. Sprites are
+        // interpolated on the delayed render clock, so a moving target's engine position
+        // leads the body on screen by up to the render latency, and a swing aimed at what
+        // is drawn would otherwise miss.
+        final double[] at = new double[3];
         for (int i = 0; i < s.mobjCount; i++) {
             if (!s.mShootable[i] || (i == s.playerMobj && (LatteWorld.playMode() || s.remote))) {
                 continue;
@@ -141,19 +234,20 @@ public final class MinecraftCombat {
                 continue;
             }
             // Closest approach of the horizontal ray to the object's column.
-            final double px = s.mx[i] - ox, py = s.my[i] - oy;
+            LatteWorld.thingDrawn(s, i, at);
+            final double px = at[0] - ox, py = at[1] - oy;
             final double t = (px * dx + py * dy) / (dlen * dlen);
             if (t < 0 || t * dlen > rangeU) {
                 continue;
             }
             final double cx = ox + dx * t, cy = oy + dy * t;
-            final double miss = Math.hypot(s.mx[i] - cx, s.my[i] - cy);
+            final double miss = Math.hypot(at[0] - cx, at[1] - cy);
             if (miss > s.mRadius[i] + 12.0) {
                 continue;
             }
             // Vertical window: the eye height along the ray against the object's body.
             final double hAt = oh + dh * t;
-            if (hAt < s.mz[i] - 8.0 || hAt > s.mz[i] + 88.0) {
+            if (hAt < at[2] - 8.0 || hAt > at[2] + 88.0) {
                 continue;
             }
             if (t < bestT) {

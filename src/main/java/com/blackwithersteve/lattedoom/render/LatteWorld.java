@@ -178,6 +178,14 @@ public final class LatteWorld {
             com.blackwithersteve.lattedoom.diag.DoomDiag.logNow("level", String.format(
                 "void rescue -> leaveLevelDim (map=%s y=%.1f)", map != null, mc.player.getY()));
             leaveLevelDim(mc);
+        } else if (mc.player != null && inLevelDim(mc) && map == null && loadInFlight) {
+            // The rescue was withheld: record which of the in-flight states held it, so a
+            // load that never completes can be told apart from one that did.
+            com.blackwithersteve.lattedoom.diag.DoomDiag.rec("level", String.format(
+                "void rescue held: start=%s booting=%s between=%s", startTeleport,
+                host != null && host.state()
+                    == com.blackwithersteve.lattedoom.engine.DoomHost.State.BOOTING,
+                host != null && host.hadLevel() && host.isBetweenLevels()));
         }
         if (mc.player != null) {
             final String dim = mc.player.level().dimension().identifier().toString();
@@ -235,6 +243,9 @@ public final class LatteWorld {
                     // holds for half a second is a real adventure end.
                     if (++titleTicks >= 10) {
                         titleTicks = 0;
+                        // The adventure is over, so the guest-delivery record is cleared:
+                        // the next shared level to arrive counts as a first join again.
+                        guestDeliveredMap = "";
                         leaveLevelDim(mc);
                         drop();
                         suit = null;
@@ -412,6 +423,11 @@ public final class LatteWorld {
                 final double engineJump = Math.hypot(ex - lastEngineX, ey - lastEngineY);
                 final double playerStep = Math.hypot(dx - lastMirrorX, dy - lastMirrorY);
                 if (engineJump > 128 && engineJump > playerStep * 3.0 + 96) {
+                    // Re-seed as the authoritative follow does. The keyframes and the glued
+                    // sector describe where the player left, not where they arrived, and a
+                    // glue left pointing at the departure sector pulls them back towards its
+                    // floor at the destination.
+                    com.blackwithersteve.lattedoom.play.DoomMovement.forceReseed();
                     teleportPlayer(mc, doomToWorldX(ex),
                         doomToWorldH(s2.mz[s2.playerMobj]), doomToWorldZ(ey));
                     host.setPlayerMirror(true, ex, ey, s2.mz[s2.playerMobj], ang,
@@ -439,6 +455,19 @@ public final class LatteWorld {
             // Engine damage is charged to the Minecraft health bar at a 5:1 scale, with no
             // invulnerability frames, since DOOM has none. Medikits and soulspheres heal it
             // back. Creative and spectator mode are exempt.
+            // An engine attack that throws the player upward, most visibly the arch-vile's.
+            // Momentum is in map units per tic; Minecraft velocity is blocks per tick.
+            final double launch = host.drainLaunch();
+            if (launch > 0 && mc.player != null && !mc.player.isSpectator()) {
+                if (marineForm) {
+                    // The engine's own integrator owns a transformed player's vertical.
+                    com.blackwithersteve.lattedoom.play.DoomMovement.launch(launch);
+                } else {
+                    final double vy = launch * (35.0 / 20.0) / UNITS;
+                    mc.player.setDeltaMovement(mc.player.getDeltaMovement().add(0, vy, 0));
+                    mc.player.hurtMarked = true;
+                }
+            }
             final int dmg = host.drainDamage();
             final int heal = host.drainHeal();
             final double[] knock = host.drainKnockback();
@@ -457,7 +486,8 @@ public final class LatteWorld {
                     kz = -knock[1] * 0.4;
                 }
                 com.blackwithersteve.lattedoom.net.LatteNet.sendPlayerDamage(
-                    mc.player.getUUID(), dmg, heal, kx, kz);
+                    mc.player.getUUID(), dmg, heal, kx, kz,
+                    shieldCovers(mc, dmg, knock));
             }
             // The engine consumed DOOM items an untransformed player walked over. Each is
             // converted through pickups.properties and the server grants the Minecraft
@@ -985,6 +1015,74 @@ public final class LatteWorld {
         return sb.toString();
     }
 
+    /**
+     * Whether a raised shield covers this hit. Minecraft decides that from the direction the
+     * damage came from, and engine damage carries no attacker entity for it to read, so the
+     * test is made here against the knockback vector the engine reports, which points from
+     * the attacker towards the player. A hit from behind is not covered, as in vanilla.
+     */
+    private static boolean shieldCovers(Minecraft mc, int dmg, double[] knock) {
+        if (dmg <= 0 || knock == null || mc.player == null || !mc.player.isBlocking()) {
+            return false;
+        }
+        final double ax = knock[0], az = -knock[1]; // attacker to player, in world axes
+        final double len = Math.hypot(ax, az);
+        if (len < 1.0e-9) {
+            return false;
+        }
+        final net.minecraft.world.phys.Vec3 look = mc.player.getLookAngle();
+        return (look.x * -ax + look.z * -az) / len > 0.0;
+    }
+
+    /** Whether this client's own engine is the one hosting the standing level. */
+    public static boolean ownsLevel() {
+        return announcedLevel;
+    }
+
+    /**
+     * Returns the player to the overworld. A guest only leaves: the level belongs to another
+     * client's engine and stays up for everyone still inside it. The owner also takes the
+     * level down, which withdraws it from every other client and stops the engine, because
+     * nothing else is driving it once its host walks away.
+     */
+    public static void leaveAndClear(Minecraft mc) {
+        final boolean owner = announcedLevel;
+        leaveLevelDim(mc);
+        if (owner) {
+            drop();
+            final var host = com.blackwithersteve.lattedoom.LatteDoomClient.host();
+            if (host != null) {
+                com.blackwithersteve.lattedoom.LatteDoomClient.stopEngine();
+            }
+        } else {
+            clearRemoteLevel();
+        }
+        setMarineForm(false);
+    }
+
+    /**
+     * Whether the loaded WAD set is organised into episodes. An {@code ExMy} set is; a
+     * commercial {@code MAPxx} set is not, and offering it an episode page picks the wrong
+     * map. This reads the WAD's own map markers rather than which menu graphics happen to be
+     * registered, because those survive a change of WAD set.
+     */
+    public static boolean hasEpisodes() {
+        try {
+            final WadFile w = wad;
+            if (w == null) {
+                return true; // nothing loaded yet: assume the DOOM 1 layout
+            }
+            for (String m : w.mapNames()) {
+                if (m.length() == 4 && (m.charAt(0) == 'E' || m.charAt(0) == 'e')) {
+                    return true;
+                }
+            }
+            return false;
+        } catch (RuntimeException e) {
+            return true;
+        }
+    }
+
     public static boolean insideLevel(double wx, double wy, double wz) {
         if (!warpedIn || map == null || mapName == null) {
             return false;
@@ -1126,8 +1224,12 @@ public final class LatteWorld {
     private static WorldSnapshot suit;
     private static boolean announcedLevel;
 
+    /** The shared map this client was last delivered into, so a level change re-delivers. */
+    private static String guestDeliveredMap = "";
+
     public static void setRemoteLevel(String name, double ox, double oy, double oz,
                                       java.util.UUID owner) {
+        final boolean changed = !name.equals(remoteName);
         remoteName = name;
         remoteOx = ox;
         remoteOy = oy;
@@ -1138,8 +1240,12 @@ public final class LatteWorld {
         // dimension, and cross-side combat needs everyone co-located. Deferred until the
         // map is raised (remoteTick), which also excludes guests without a WAD.
         final var mc = Minecraft.getInstance();
-        guestEnterPending = mc.player != null && owner != null
+        final boolean guest = mc.player != null && owner != null
             && !owner.equals(mc.player.getUUID());
+        // Deliver on the first join and again on every level change, so a co-op guest is
+        // carried into the next map with the owner instead of being left at coordinates
+        // that belong to the previous one.
+        guestEnterPending = guest && (changed || !name.equals(guestDeliveredMap));
     }
 
     public static void clearRemoteLevel() {
@@ -1237,6 +1343,9 @@ public final class LatteWorld {
             final double[] start = playerStartWorld();
             if (start != null) {
                 guestEnterPending = false;
+                guestDeliveredMap = remoteName;
+                // The physics keyframes still describe the previous map, or the overworld.
+                com.blackwithersteve.lattedoom.play.DoomMovement.forceReseed();
                 enterLevelDim(mc, start[0], start[1] + 0.1, start[2]);
             }
         }
@@ -1309,6 +1418,9 @@ public final class LatteWorld {
                 final double bodyJump = Math.hypot(bx - lastRbX, by - lastRbY);
                 final double playerStep = Math.hypot(dx - presX, dy - presY);
                 if (bodyJump > 128 && bodyJump > playerStep * 3.0 + 96) {
+                    // Same re-seed as the owner's own follow: the physics keyframes and the
+                    // glued sector belong to where this guest left, not where they arrived.
+                    com.blackwithersteve.lattedoom.play.DoomMovement.forceReseed();
                     teleportPlayer(mc, doomToWorldX(bx), doomToWorldH(bz), doomToWorldZ(by));
                     presX = Double.NaN;
                     lastRbX = Double.NaN;
@@ -1356,7 +1468,7 @@ public final class LatteWorld {
             final int heal = rb.pendingHeal.getAndSet(0);
             if (dmg > 0 || heal > 0) {
                 // Routed through the server so the level owner can damage any player
-                com.blackwithersteve.lattedoom.net.LatteNet.sendPlayerDamage(who, dmg, heal, 0, 0);
+                com.blackwithersteve.lattedoom.net.LatteNet.sendPlayerDamage(who, dmg, heal, 0, 0, false);
             }
         }
     }
@@ -1444,7 +1556,7 @@ public final class LatteWorld {
         }
         groups = g;
         sectorBounds = bounds;
-        LatteSectorBuffers.dispose(); // new map -> the S2 buffers rebuild lazily next frame
+        LatteSectorBuffers.dispose(); // a new map: the persistent buffers rebuild lazily next frame
         // (the /doomwarp start-delivery is consumed in clientTick: it must fire even when
         // the map was already raised, e.g. warping to the same level again)
         // sector adjacency for moving-neighbor rebakes (a wall in N faces M's opening)
@@ -1481,6 +1593,9 @@ public final class LatteWorld {
         }
         prevFloor = prevCeil = curFloor = curCeil = null; // keyframes re-seed on first frame
         lastTic = -1;
+        // Sector indices from the previous map are meaningless against this one's arrays,
+        // and syncHeights would re-bake them straight into an out-of-bounds read.
+        dirtyRebake.clear();
         mapName = name;
         failedMap = null;
         if (forcedOrigin == null && warpedIn) {
@@ -1634,7 +1749,7 @@ public final class LatteWorld {
                 }
             }
             if (LatteSectorBuffers.ENABLED) {
-                LatteSectorBuffers.rebuild(i, one); // S2: keep this sector's GPU buffer current
+                LatteSectorBuffers.rebuild(i, one); // keep this sector's persistent GPU buffer current
             }
         }
     }
@@ -1893,6 +2008,17 @@ public final class LatteWorld {
         }
         final Minecraft mc = Minecraft.getInstance();
         if (mc.player == null) {
+            return;
+        }
+        // The ride only applies while the level's rules do. This writes the player's Y
+        // directly every frame, so without the same gate the rest of the movement code uses
+        // it keeps pulling them onto a sector they are no longer standing on: after leaving
+        // the level, while flying, or while riding a Minecraft vehicle. The glue is also
+        // dropped here so the next frame has nothing to follow.
+        if (!warpedIn || !inLevelDim(mc) || mc.player.isPassenger()
+            || mc.player.getAbilities().flying
+            || !insideLevel(mc.player.getX(), mc.player.getY(), mc.player.getZ())) {
+            com.blackwithersteve.lattedoom.play.DoomMovement.releaseGlue();
             return;
         }
         // Lock the rider to the platform mesh's own timeline. setPos alone is not enough: MC
