@@ -1,268 +1,781 @@
 package com.blackwithersteve.lattedoom.play;
 
 import com.blackwithersteve.lattedoom.render.DoomMap;
+import com.blackwithersteve.lattedoom.render.LatteWorld;
 
-/**
- * The engine's {@code P_CheckPosition}, {@code P_TryMove} and {@code P_SlideMove} for the
- * mirrored player, in map units on the map plane.
- *
- * <p>Collision follows the original's method: the destination bounding box, of radius 16,
- * is tested against every linedef it straddles. One-sided and blocking lines reject the
- * move outright, while two-sided lines narrow the floor and ceiling limits through their
- * opening. The verdict then follows from three numbers: the opening must be at least 56
- * units tall, a step up may be at most 24 units, and grounded feet snap to the resulting
- * floor, which is what makes stairs a smooth rise rather than a jump. A blocked move
- * slides as {@code P_SlideMove} does, by projecting the momentum onto the blocking wall
- * and falling back to per-axis movement.
- *
- * <p>This class is pure geometry with no Minecraft dependencies, which is what allows the
- * movement harness to exercise it headlessly.
- */
-public final class DoomCollision {
+import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.phys.Vec3;
 
-    public static final double RADIUS = 16.0;
-    public static final double HEIGHT = 56.0;
-    public static final double STEP_UP = 24.0;
+public final class ItemCollision {
 
-    /** PIT_CheckThing stand-in: does a solid thing's box overlap the player box at (px,py)? */
-    public interface ThingBlocker {
-        boolean blockedAt(double px, double py);
-    }
+    private static final double FLOOR_FRICTION = 0.60;
+    private static final double STOP_EPSILON = 0.003;
 
-    public static final ThingBlocker NOTHING = (px, py) -> false;
+    /*
+     * Actual collision radius of the item in Doom map units.
+     *
+     * Increase this if items can still get their edges through walls.
+     */
+    private static final double ITEM_RADIUS = 4.3;
 
-    /** Where the move ended: position, height, what happened to momentum. */
-    public record Result(double x, double y, double h,
-                         boolean blockedX, boolean blockedY,
-                         double slideDirX, double slideDirY,
-                         boolean onGround, double floorZ, double ceilZ) {
-        public boolean slid() {
-            return slideDirX != 0 || slideDirY != 0;
+    /*
+     * Small extra separation from walls.
+     *
+     * Prevents floating point errors from leaving the item embedded.
+     */
+    private static final double WALL_SKIN = 0.06;
+
+    private static final double EPSILON = 0.000001;
+
+    /*
+     * Multiple collision iterations let an item:
+     *
+     *   wall -> corner -> another wall
+     *
+     * in the same tick without tunneling through the geometry.
+     */
+    private static final int MAX_WALL_ITERATIONS = 5;
+
+    public static boolean tick(ItemEntity item) {
+        DoomMap map = LatteWorld.map();
+
+        if (map == null) {
+            return false;
         }
-    }
 
-    /**
-     * One movement step: {@code (mx, my)} across the plane and {@code mh} vertically.
-     * Moves longer than 24 units are halved first, because the destination-box method
-     * must never step further than its own box.
-     */
-    public static Result move(DoomMap map, double x, double y, double h,
-                              double mx, double my, double mh) {
-        return move(map, x, y, h, mx, my, mh, NOTHING);
-    }
+        double worldX = item.getX();
+        double worldY = item.getY();
+        double worldZ = item.getZ();
 
-    /** As above, but a ThingBlocker also stops the box: barrels, pillars, live monsters. */
-    public static Result move(DoomMap map, double x, double y, double h,
-                              double mx, double my, double mh, ThingBlocker things) {
-        return move(map, x, y, h, mx, my, mh, things, HEIGHT);
-    }
-
-    /**
-     * As above for a body of the given height in map units. A transformed player is the
-     * engine's 56 units tall, while an untransformed one keeps their Minecraft box of 1.8
-     * blocks, which is 50.4 units. Clipping the latter at 56 refuses openings their body
-     * visibly fits through and stops them on a step up into a low ceiling.
-     */
-    public static Result move(DoomMap map, double x, double y, double h,
-                              double mx, double my, double mh, ThingBlocker things,
-                              double height) {
-        return move(map, x, y, h, mx, my, mh, things, height, RADIUS);
-    }
-
-    /**
-     * As above for a body of the given height and radius in map units. A transformed player
-     * is the engine's 56 by 16; an untransformed one keeps their Minecraft box, which is
-     * narrower as well as shorter, and clipping them at the wider radius refuses gaps their
-     * body plainly fits through.
-     */
-    public static Result move(DoomMap map, double x, double y, double h,
-                              double mx, double my, double mh, ThingBlocker things,
-                              double height, double radius) {
-        if (Math.abs(mx) > 24 || Math.abs(my) > 24) {
-            final Result first = move(map, x, y, h, mx / 2, my / 2, mh / 2, things, height, radius);
-            final Result second = move(map, first.x, first.y, first.h,
-                mx / 2, my / 2, mh / 2, things, height, radius);
-            return new Result(second.x, second.y, second.h,
-                first.blockedX || second.blockedX, first.blockedY || second.blockedY,
-                second.slid() ? second.slideDirX : first.slideDirX,
-                second.slid() ? second.slideDirY : first.slideDirY,
-                second.onGround, second.floorZ, second.ceilZ);
+        if (!LatteWorld.insideLevel(worldX, worldY, worldZ)) {
+            return false;
         }
-        return moveOnce(map, x, y, h, mx, my, mh, things, height, radius);
-    }
 
-    private static Result moveOnce(DoomMap map, double x, double y, double h,
-                                   double mx, double my, double mh, ThingBlocker things,
-                                   double height, double radius) {
-        double nx = x, ny = y;
-        boolean blockedX = false, blockedY = false;
-        double slideX = 0, slideY = 0;
+        double doomX = LatteWorld.worldToDoomX(worldX);
+        double doomY = LatteWorld.worldToDoomY(worldZ);
 
-        final Check dest = check(map, x + mx, y + my, h, things, height, radius);
-        if (dest.ok) {
-            nx = x + mx;
-            ny = y + my;
-        } else if (dest.line != null) {
-            // P_SlideMove: project the motion onto the wall and continue along it.
-            final double ldx = dest.line.x2() - dest.line.x1();
-            final double ldy = dest.line.y2() - dest.line.y1();
-            final double len = Math.hypot(ldx, ldy);
-            if (len > 1.0e-9) {
-                final double ux = ldx / len, uy = ldy / len;
-                final double t = mx * ux + my * uy;
-                // The slide is the wall-parallel component of the motion. Applying that
-                // component in full can overshoot into the next linedef, at a curved wall's
-                // segment joint or the far wall of a corner, so the original clips it to the
-                // largest fraction that fits while keeping the wall-parallel momentum.
-                // Testing only the full endpoint discards the entire slide in those cases
-                // and falls back to per-axis movement, which zeroes both axes against a
-                // diagonal wall and leaves the player unable to move along it.
-                if (t != 0) {
-                    double frac = 1.0;
-                    for (int i = 0; i < 5; i++) {
-                        final Check slide = check(map, x + t * frac * ux, y + t * frac * uy, h, things, height, radius);
-                        if (slide.ok) {
-                            nx = x + t * frac * ux;
-                            ny = y + t * frac * uy;
-                            slideX = ux;
-                            slideY = uy;
-                            break;
-                        }
-                        frac *= 0.5;
-                    }
-                }
+        int sector = map.sectorAt(doomX, doomY);
+
+        if (sector < 0) {
+            return false;
+        }
+
+        double floorZ = map.floorNow(sector);
+        double ceilZ = map.ceilNow(sector);
+
+        double floorWorldY = LatteWorld.doomToWorldH(floorZ);
+        double ceilWorldY = LatteWorld.doomToWorldH(ceilZ);
+
+        Vec3 velocity = item.getDeltaMovement();
+
+        double vx = velocity.x;
+        double vy = velocity.y;
+        double vz = velocity.z;
+
+        /*
+         * Vanilla ItemEntity has already applied gravity and performed
+         * its normal movement before this collision pass.
+         */
+
+        /*
+         * FLOOR
+         */
+        if (worldY <= floorWorldY + WALL_SKIN && vy <= 0.0) {
+            worldY = floorWorldY;
+            vy = 0.0;
+
+            item.setOnGround(true);
+
+            vx *= FLOOR_FRICTION;
+            vz *= FLOOR_FRICTION;
+
+            if (Math.abs(vx) < STOP_EPSILON) {
+                vx = 0.0;
             }
-            if (nx == x && ny == y) {
-                // Per-axis fallbacks, as P_XYMovement does.
-                final Check onlyX = check(map, x + mx, y, h, things, height, radius);
-                if (onlyX.ok && mx != 0) {
-                    nx = x + mx;
-                    blockedY = true;
-                } else {
-                    final Check onlyY = check(map, x, y + my, h, things, height, radius);
-                    if (onlyY.ok && my != 0) {
-                        ny = y + my;
-                        blockedX = true;
-                    } else {
-                        blockedX = true;
-                        blockedY = true;
-                    }
-                }
-            }
-        } else if (dest.thingBlocked) {
-            // A solid object, with no wall to project onto: fall back to per-axis movement
-            // so the player slides around its bounding box rather than sticking to it.
-            final Check onlyX = check(map, x + mx, y, h, things, height, radius);
-            if (onlyX.ok && mx != 0) {
-                nx = x + mx;
-                blockedY = true;
-            } else {
-                final Check onlyY = check(map, x, y + my, h, things, height, radius);
-                if (onlyY.ok && my != 0) {
-                    ny = y + my;
-                    blockedX = true;
-                } else {
-                    blockedX = true;
-                    blockedY = true;
-                }
+
+            if (Math.abs(vz) < STOP_EPSILON) {
+                vz = 0.0;
             }
         } else {
-            blockedX = true;
-            blockedY = true;
+            item.setOnGround(false);
         }
 
-        // Resolve the heights from the box the move ended in. That box is free of objects
-        // by construction, so the plain map test gives the floor and ceiling.
-        final Check stand = check(map, nx, ny, h, NOTHING, height, radius);
-        double floorZ = stand.floorZ, ceilZ = stand.ceilZ;
-        if (stand.line == null && !stand.ok && floorZ == 0 && ceilZ == 0) {
-            // A point outside every sector returns the sentinel Check(false, null, 0, 0),
-            // whose zeroes mean "no answer" rather than a floor at height zero. Using them
-            // drops the player to map height 0, which on most levels is far below the floor.
-            // Keeping the height the move started at leaves the decision to the caller's own
-            // out-of-level handling instead.
-            floorZ = h;
-            ceilZ = h + height;
+        /*
+         * CEILING
+         */
+        if (worldY >= ceilWorldY - WALL_SKIN && vy > 0.0) {
+            worldY = ceilWorldY;
+            vy = 0.0;
         }
 
-        // P_ZMovement
-        double nh = h + mh;
-        boolean ground = false;
-        if (nh <= floorZ) {
-            nh = floorZ;
-            ground = true;
+        /*
+         * WALL MOVEMENT
+         *
+         * Work entirely in Doom XY space for horizontal collision.
+         */
+        double currentX = LatteWorld.worldToDoomX(worldX);
+        double currentY = LatteWorld.worldToDoomY(worldZ);
+
+        double targetX =
+            LatteWorld.worldToDoomX(worldX + vx);
+
+        double targetY =
+            LatteWorld.worldToDoomY(worldZ + vz);
+
+        /*
+         * Sweep the item's collision circle through the movement.
+         *
+         * We can hit multiple walls during one tick.
+         */
+        for (int iteration = 0; iteration < MAX_WALL_ITERATIONS; iteration++) {
+
+            double moveX = targetX - currentX;
+            double moveY = targetY - currentY;
+
+            if (Math.hypot(moveX, moveY) < EPSILON) {
+                break;
+            }
+
+            WallHit hit = findCircleSweepHit(
+                map,
+                currentX,
+                currentY,
+                targetX,
+                targetY
+            );
+
+            if (hit == null) {
+                currentX = targetX;
+                currentY = targetY;
+                break;
+            }
+
+
+//i dont know why the player cant pick up items as steve
+//i based this code on doomCollision.java because i am still very new to making minecraft mods
+
+
+            /*
+             * Move to just before the collision.
+             */
+            double safeFraction =
+                Math.max(0.0, hit.fraction - 0.0005);
+
+            currentX += moveX * safeFraction;
+            currentY += moveY * safeFraction;
+
+            /*
+             * Push the item away from the wall.
+             *
+             * This is important because simply stopping at the collision
+             * point can leave the radius partially inside the wall.
+             */
+            currentX += hit.normalX * WALL_SKIN;
+            currentY += hit.normalY * WALL_SKIN;
+
+            /*
+             * Remaining movement after the collision.
+             */
+            double remaining = 0.9 - safeFraction;
+
+            if (remaining <= EPSILON) {
+                targetX = currentX;
+                targetY = currentY;
+                break;
+            }
+
+            /*
+             * Calculate the movement that remains.
+             */
+            double remainingX = moveX * remaining;
+            double remainingY = moveY * remaining;
+
+            /*
+             * Remove the component pointing INTO the wall.
+             *
+             * Tangential velocity remains, producing natural sliding.
+             */
+            double intoWall =
+                remainingX * hit.normalX
+                + remainingY * hit.normalY;
+
+            if (intoWall < 0.0) {
+                remainingX -= hit.normalX * intoWall;
+                remainingY -= hit.normalY * intoWall;
+            }
+
+            /*
+             * Do the same thing to actual item velocity.
+             *
+             * This is what makes thrown items preserve their velocity
+             * when they scrape along a wall.
+             */
+            double doomVelocityX =
+                worldDeltaToDoomX(vx);
+
+            double doomVelocityY =
+                worldDeltaToDoomY(vz);
+
+            double velocityIntoWall =
+                doomVelocityX * hit.normalX
+                + doomVelocityY * hit.normalY;
+
+            if (velocityIntoWall < 0.0) {
+                doomVelocityX -=
+                    hit.normalX * velocityIntoWall;
+
+                doomVelocityY -=
+                    hit.normalY * velocityIntoWall;
+            }
+
+            vx = doomDeltaToWorldX(doomVelocityX);
+            vz = doomDeltaToWorldZ(doomVelocityY);
+
+            /*
+             * Continue the remaining movement.
+             */
+            targetX = currentX + remainingX;
+            targetY = currentY + remainingY;
         }
-        if (nh + height > ceilZ) {
-            nh = Math.max(floorZ, ceilZ - height);
+
+        worldX = doomToWorldX(currentX);
+        worldZ = doomToWorldZ(currentY);
+
+        /*
+         * Final sector correction.
+         *
+         * The item may have crossed a sector boundary during a wall slide.
+         */
+        double finalDoomX =
+            LatteWorld.worldToDoomX(worldX);
+
+        double finalDoomY =
+            LatteWorld.worldToDoomY(worldZ);
+
+        int finalSector =
+            map.sectorAt(finalDoomX, finalDoomY);
+
+        if (finalSector >= 0) {
+
+            double finalFloor =
+                LatteWorld.doomToWorldH(
+                    map.floorNow(finalSector)
+                );
+
+            double finalCeiling =
+                LatteWorld.doomToWorldH(
+                    map.ceilNow(finalSector)
+                );
+
+            if (worldY <= finalFloor + WALL_SKIN && vy <= 0.0) {
+                worldY = finalFloor;
+                vy = 0.0;
+
+                item.setOnGround(true);
+            }
+
+            if (worldY >= finalCeiling - WALL_SKIN && vy > 0.0) {
+                worldY = finalCeiling;
+                vy = 0.0;
+            }
         }
-        // A grounded player rises with the floor when stepping up.
-        if (mh == 0 && h <= floorZ + 0.001) {
-            nh = floorZ;
-            ground = true;
-        }
-        return new Result(nx, ny, nh, blockedX, blockedY, slideX, slideY, ground, floorZ, ceilZ);
+
+        item.setPos(
+            worldX,
+            worldY,
+            worldZ
+        );
+
+        item.setDeltaMovement(
+            vx,
+            vy,
+            vz
+        );
+
+        return true;
     }
 
-    private record Check(boolean ok, DoomMap.Line line, double floorZ, double ceilZ,
-                         boolean thingBlocked) {}
+    /*
+     * Sweeps a circle against every solid Doom wall.
+     *
+     * Unlike the old implementation, this detects:
+     *
+     *   - direct wall hits
+     *   - angled hits
+     *   - glancing hits
+     *   - corner hits
+     *   - endpoint hits
+     *   - very short movement segments
+     *   - tunneling caused by high throw velocity
+     */
+    private static WallHit findCircleSweepHit(
+            DoomMap map,
+            double x1,
+            double y1,
+            double x2,
+            double y2) {
 
-    /** P_CheckPosition at (px,py) for a marine whose feet are at height h. */
-    private static Check check(DoomMap map, double px, double py, double h,
-                               ThingBlocker things, double height, double radius) {
-        final int sec = map.sectorAt(px, py);
-        if (sec < 0) {
-            return new Check(false, null, 0, 0, false); // the void
-        }
-        double floorZ = map.floorNow(sec);
-        double ceilZ = map.ceilNow(sec);
+        WallHit closest = null;
 
-        for (DoomMap.Line l : map.lines) {
-            // Cheap bounding-box rejection first.
-            if (Math.max(l.x1(), l.x2()) < px - radius || Math.min(l.x1(), l.x2()) > px + radius
-                || Math.max(l.y1(), l.y2()) < py - radius || Math.min(l.y1(), l.y2()) > py + radius) {
+        for (DoomMap.Line line : map.lines) {
+
+            if (!isSolid(line)) {
                 continue;
             }
-            if (!boxStraddlesLine(px, py, radius, l)) {
+
+            WallHit hit = sweepCircleAgainstLine(
+                x1,
+                y1,
+                x2,
+                y2,
+                line
+            );
+
+            if (hit == null) {
                 continue;
             }
-            if (l.backSector() < 0 || l.frontSector() < 0 || (l.flags() & 0x1) != 0) {
-                return new Check(false, l, floorZ, ceilZ, false); // solid / ML_BLOCKING
+
+            if (closest == null
+                || hit.fraction < closest.fraction) {
+
+                closest = hit;
             }
-            final double ff = map.floorNow(l.frontSector()), bf = map.floorNow(l.backSector());
-            final double fc = map.ceilNow(l.frontSector()), bc = map.ceilNow(l.backSector());
-            final double openBot = Math.max(ff, bf);
-            final double openTop = Math.min(fc, bc);
-            if (openTop - openBot < height    // the opening is shorter than the player
-                || openBot - h > STEP_UP) {   // the step up is taller than 24 units
-                return new Check(false, l, floorZ, ceilZ, false);
-            }
-            floorZ = Math.max(floorZ, openBot);
-            ceilZ = Math.min(ceilZ, openTop);
         }
-        if (ceilZ - floorZ < height || ceilZ - h < height || floorZ - h > STEP_UP) {
-            return new Check(false, null, floorZ, ceilZ, false);
-        }
-        if (things.blockedAt(px, py)) {
-            return new Check(false, null, floorZ, ceilZ, true); // linedefs clear, a body in the box
-        }
-        return new Check(true, null, floorZ, ceilZ, false);
+
+        return closest;
     }
 
-    private static boolean boxStraddlesLine(double px, double py, double radius, DoomMap.Line l) {
-        final double dx = l.x2() - l.x1(), dy = l.y2() - l.y1();
-        boolean neg = false, pos = false;
-        for (int c = 0; c < 4; c++) {
-            final double cx = px + ((c & 1) == 0 ? -radius : radius);
-            final double cy = py + ((c & 2) == 0 ? -radius : radius);
-            final double cross = dx * (cy - l.y1()) - dy * (cx - l.x1());
-            if (cross < 0) {
-                neg = true;
-            } else {
-                pos = true;
-            }
+    private static boolean isSolid(DoomMap.Line line) {
+
+        /*
+         * One-sided linedefs are solid.
+         */
+        if (line.frontSector() < 0
+            || line.backSector() < 0) {
+
+            return true;
         }
-        return neg && pos;
+
+        /*
+         * Doom BLOCKING flag.
+         */
+        return (line.flags() & 0x1) != 0;
     }
 
-    private DoomCollision() {}
+    /*
+     * Sweeps a circle against a line segment.
+     *
+     * The collision is found by checking:
+     *
+     * 1. The infinite line around the wall.
+     * 2. The finite wall segment.
+     * 3. Both wall endpoints as circles.
+     *
+     * This is substantially more robust than a simple
+     * segment/segment intersection.
+     */
+    private static WallHit sweepCircleAgainstLine(
+            double x1,
+            double y1,
+            double x2,
+            double y2,
+            DoomMap.Line line) {
+
+        double ax = line.x1();
+        double ay = line.y1();
+        double bx = line.x2();
+        double by = line.y2();
+
+        double wallX = bx - ax;
+        double wallY = by - ay;
+
+        double wallLength =
+            Math.hypot(wallX, wallY);
+
+        if (wallLength < EPSILON) {
+            return sweepCircleAgainstPoint(
+                x1,
+                y1,
+                x2,
+                y2,
+                ax,
+                ay
+            );
+        }
+
+        double nx = -wallY / wallLength;
+        double ny = wallX / wallLength;
+
+        double moveX = x2 - x1;
+        double moveY = y2 - y1;
+
+        WallHit best = null;
+
+        /*
+         * Determine which side of the wall the item starts on.
+         *
+         * This prevents the sweep from immediately detecting the
+         * "back side" of the expanded wall.
+         */
+        double startDistance =
+            (x1 - ax) * nx
+            + (y1 - ay) * ny;
+
+        double direction =
+            moveX * nx
+            + moveY * ny;
+
+        /*
+         * Test both offset surfaces of the wall.
+         */
+        double[] offsets = {
+            ITEM_RADIUS,
+            -ITEM_RADIUS
+        };
+
+        for (double offset : offsets) {
+
+            /*
+             * If we're already inside this expanded surface,
+             * don't create a fake collision at t=0.
+             */
+            double distance =
+                startDistance - offset;
+
+            if (Math.abs(direction) < EPSILON) {
+                continue;
+            }
+
+            double t =
+                -distance / direction;
+
+            if (t < -EPSILON || t > 1.0 + EPSILON) {
+                continue;
+            }
+
+            t = clamp01(t);
+
+            double hitX =
+                x1 + moveX * t;
+
+            double hitY =
+                y1 + moveY * t;
+
+            /*
+             * Project collision point onto the wall.
+             */
+            double along =
+                (hitX - ax) * (wallX / wallLength)
+                + (hitY - ay) * (wallY / wallLength);
+
+            if (along < -ITEM_RADIUS
+                || along > wallLength + ITEM_RADIUS) {
+
+                continue;
+            }
+
+            double normalSign =
+                offset >= 0.0 ? 1.0 : -1.0;
+
+            double hitNormalX =
+                nx * normalSign;
+
+            double hitNormalY =
+                ny * normalSign;
+
+            /*
+             * Only collide if movement is entering the wall.
+             */
+            double approach =
+                moveX * hitNormalX
+                + moveY * hitNormalY;
+
+            if (approach >= 0.0) {
+                continue;
+            }
+
+            WallHit candidate =
+                new WallHit(
+                    line,
+                    t,
+                    hitNormalX,
+                    hitNormalY
+                );
+
+            if (best == null
+                || candidate.fraction < best.fraction) {
+
+                best = candidate;
+            }
+        }
+
+        /*
+         * Endpoint tests are extremely important.
+         *
+         * Without these, the item's radius can cut around the end
+         * of a wall even though the actual circle hits the corner.
+         */
+        WallHit startPointHit =
+            sweepCircleAgainstPoint(
+                x1,
+                y1,
+                x2,
+                y2,
+                ax,
+                ay
+            );
+
+        if (startPointHit != null
+            && (best == null
+                || startPointHit.fraction < best.fraction)) {
+
+            best = startPointHit;
+        }
+
+        WallHit endPointHit =
+            sweepCircleAgainstPoint(
+                x1,
+                y1,
+                x2,
+                y2,
+                bx,
+                by
+            );
+
+        if (endPointHit != null
+            && (best == null
+                || endPointHit.fraction < best.fraction)) {
+
+            best = endPointHit;
+        }
+
+        return best;
+    }
+
+    /*
+     * Sweeps the item's circle against a single point.
+     *
+     * This is effectively a ray vs circle test.
+     */
+    private static WallHit sweepCircleAgainstPoint(
+            double x1,
+            double y1,
+            double x2,
+            double y2,
+            double px,
+            double py) {
+
+        double dx = x2 - x1;
+        double dy = y2 - y1;
+
+        double fx = x1 - px;
+        double fy = y1 - py;
+
+        double a =
+            dx * dx
+            + dy * dy;
+
+        if (a < EPSILON) {
+            return null;
+        }
+
+        double b =
+            2.0 * (fx * dx + fy * dy);
+
+        double c =
+            fx * fx
+            + fy * fy
+            - ITEM_RADIUS * ITEM_RADIUS;
+
+        double discriminant =
+            b * b
+            - 4.0 * a * c;
+
+        if (discriminant < 0.0) {
+            return null;
+        }
+
+        double sqrt =
+            Math.sqrt(discriminant);
+
+        double t1 =
+            (-b - sqrt) / (2.0 * a);
+
+        double t2 =
+            (-b + sqrt) / (2.0 * a);
+
+        double t = Double.POSITIVE_INFINITY;
+
+        if (t1 >= -EPSILON && t1 <= 1.0 + EPSILON) {
+            t = t1;
+        }
+
+        if (t2 >= -EPSILON
+            && t2 <= 1.0 + EPSILON
+            && t2 < t) {
+
+            t = t2;
+        }
+
+        if (!Double.isFinite(t)) {
+            return null;
+        }
+
+        t = clamp01(t);
+
+        double hitX =
+            x1 + dx * t;
+
+        double hitY =
+            y1 + dy * t;
+
+        double normalX =
+            hitX - px;
+
+        double normalY =
+            hitY - py;
+
+        double length =
+            Math.hypot(normalX, normalY);
+
+        if (length < EPSILON) {
+            /*
+             * The center is exactly on the endpoint.
+             *
+             * Use the opposite movement direction as the normal.
+             */
+            length =
+                Math.hypot(dx, dy);
+
+            if (length < EPSILON) {
+                return null;
+            }
+
+            normalX = -dx / length;
+            normalY = -dy / length;
+        } else {
+            normalX /= length;
+            normalY /= length;
+        }
+
+        /*
+         * Only report an actual approaching collision.
+         */
+        double approach =
+            dx * normalX
+            + dy * normalY;
+
+        if (approach >= 0.0) {
+            return null;
+        }
+
+        return new WallHit(
+            null,
+            t,
+            normalX,
+            normalY
+        );
+    }
+
+    private static double clamp01(double value) {
+        return Math.max(
+            0.0,
+            Math.min(1.0, value)
+        );
+    }
+
+    /*
+     * Convert a world-space X movement into Doom-space X movement.
+     */
+    private static double worldDeltaToDoomX(double worldDelta) {
+        double a =
+            LatteWorld.worldToDoomX(0.0);
+
+        double b =
+            LatteWorld.worldToDoomX(1.0);
+
+        return worldDelta * (b - a);
+    }
+
+    /*
+     * Convert a world-space Z movement into Doom-space Y movement.
+     */
+    private static double worldDeltaToDoomY(double worldDelta) {
+        double a =
+            LatteWorld.worldToDoomY(0.0);
+
+        double b =
+            LatteWorld.worldToDoomY(1.0);
+
+        return worldDelta * (b - a);
+    }
+
+    private static double doomDeltaToWorldX(double doomDelta) {
+        double a =
+            LatteWorld.worldToDoomX(0.0);
+
+        double b =
+            LatteWorld.worldToDoomX(1.0);
+
+        double scale = b - a;
+
+        if (Math.abs(scale) < EPSILON) {
+            return 0.0;
+        }
+
+        return doomDelta / scale;
+    }
+
+    private static double doomDeltaToWorldZ(double doomDelta) {
+        double a =
+            LatteWorld.worldToDoomY(0.0);
+
+        double b =
+            LatteWorld.worldToDoomY(1.0);
+
+        double scale = b - a;
+
+        if (Math.abs(scale) < EPSILON) {
+            return 0.0;
+        }
+
+        return doomDelta / scale;
+    }
+
+    private static double doomToWorldX(double doomX) {
+        double a =
+            LatteWorld.worldToDoomX(0.0);
+
+        double b =
+            LatteWorld.worldToDoomX(1.0);
+
+        if (Math.abs(b - a) < EPSILON) {
+            return 0.0;
+        }
+
+        return (doomX - a) / (b - a);
+    }
+
+    private static double doomToWorldZ(double doomY) {
+        double a =
+            LatteWorld.worldToDoomY(0.0);
+
+        double b =
+            LatteWorld.worldToDoomY(1.0);
+
+        if (Math.abs(b - a) < EPSILON) {
+            return 0.0;
+        }
+
+        return (doomY - a) / (b - a);
+    }
+
+    private record WallHit(
+        DoomMap.Line line,
+        double fraction,
+        double normalX,
+        double normalY
+    ) {}
+
+    private ItemCollision() {}
 }
