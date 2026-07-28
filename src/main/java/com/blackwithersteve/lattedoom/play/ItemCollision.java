@@ -13,7 +13,7 @@ public final class ItemCollision {
 
     /*
      * Actual collision radius of the item in Doom map units.
-     *
+     * its hard to get things right the first try
      * Increase this if items can still get their edges through walls.
      */
     private static final double ITEM_RADIUS = 4.3;
