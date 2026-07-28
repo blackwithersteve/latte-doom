@@ -3,7 +3,6 @@
 	"package": "com.blackwithersteve.lattedoom.mixin",
 	"compatibilityLevel": "JAVA_21",
 	"mixins": [
-		"BlockDropMixin",
 		"FallDamageMixin",
 		"ItemEntityMixin",
 		"MarineDeathMixin",
