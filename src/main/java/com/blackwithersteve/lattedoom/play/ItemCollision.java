@@ -11,29 +11,20 @@ public final class ItemCollision {
     private static final double FLOOR_FRICTION = 0.60;
     private static final double STOP_EPSILON = 0.003;
 
-    /*
-     * Actual collision radius of the item in Doom map units.
-     *
-     * Increase this if items can still get their edges through walls.
-     */
     private static final double ITEM_RADIUS = 4.3;
+    private static final double WALL_SKIN = 0.06;
 
     /*
-     * Small extra separation from walls.
+     * Small vertical offset so the ItemEntity's actual Minecraft
+     * bounding box sits on the Doom floor instead of being centered
+     * directly inside it.
      *
-     * Prevents floating point errors from leaving the item embedded.
+     * If pickup is still unreliable, try 0.10, 0.15, or 0.20.
      */
-    private static final double WALL_SKIN = 0.06;
+    private static final double ITEM_FLOOR_OFFSET = 0.12;
 
     private static final double EPSILON = 0.000001;
 
-    /*
-     * Multiple collision iterations let an item:
-     *
-     *   wall -> corner -> another wall
-     *
-     * in the same tick without tunneling through the geometry.
-     */
     private static final int MAX_WALL_ITERATIONS = 5;
 
     public static boolean tick(ItemEntity item) {
@@ -51,37 +42,50 @@ public final class ItemCollision {
             return false;
         }
 
-        double doomX = LatteWorld.worldToDoomX(worldX);
-        double doomY = LatteWorld.worldToDoomY(worldZ);
+        double doomX =
+            LatteWorld.worldToDoomX(worldX);
 
-        int sector = map.sectorAt(doomX, doomY);
+        double doomY =
+            LatteWorld.worldToDoomY(worldZ);
+
+        int sector =
+            map.sectorAt(
+                doomX,
+                doomY
+            );
 
         if (sector < 0) {
             return false;
         }
 
-        double floorZ = map.floorNow(sector);
-        double ceilZ = map.ceilNow(sector);
+        double floorZ =
+            map.floorNow(sector);
 
-        double floorWorldY = LatteWorld.doomToWorldH(floorZ);
-        double ceilWorldY = LatteWorld.doomToWorldH(ceilZ);
+        double ceilZ =
+            map.ceilNow(sector);
 
-        Vec3 velocity = item.getDeltaMovement();
+        double floorWorldY =
+            LatteWorld.doomToWorldH(floorZ);
+
+        double ceilWorldY =
+            LatteWorld.doomToWorldH(ceilZ);
+
+        Vec3 velocity =
+            item.getDeltaMovement();
 
         double vx = velocity.x;
         double vy = velocity.y;
         double vz = velocity.z;
 
         /*
-         * Vanilla ItemEntity has already applied gravity and performed
-         * its normal movement before this collision pass.
-         */
-
-        /*
          * FLOOR
          */
-        if (worldY <= floorWorldY + WALL_SKIN && vy <= 0.0) {
-            worldY = floorWorldY;
+        if (worldY <= floorWorldY + ITEM_FLOOR_OFFSET + WALL_SKIN
+            && vy <= 0.0) {
+
+            worldY =
+                floorWorldY + ITEM_FLOOR_OFFSET;
+
             vy = 0.0;
 
             item.setOnGround(true);
@@ -96,6 +100,7 @@ public final class ItemCollision {
             if (Math.abs(vz) < STOP_EPSILON) {
                 vz = 0.0;
             }
+
         } else {
             item.setOnGround(false);
         }
@@ -103,46 +108,62 @@ public final class ItemCollision {
         /*
          * CEILING
          */
-        if (worldY >= ceilWorldY - WALL_SKIN && vy > 0.0) {
-            worldY = ceilWorldY;
+        if (worldY >= ceilWorldY - WALL_SKIN
+            && vy > 0.0) {
+
+            worldY =
+                ceilWorldY - WALL_SKIN;
+
             vy = 0.0;
         }
 
         /*
-         * WALL MOVEMENT
-         *
-         * Work entirely in Doom XY space for horizontal collision.
+         * Convert current position into Doom XY.
          */
-        double currentX = LatteWorld.worldToDoomX(worldX);
-        double currentY = LatteWorld.worldToDoomY(worldZ);
+        double currentX =
+            LatteWorld.worldToDoomX(worldX);
 
-        double targetX =
-            LatteWorld.worldToDoomX(worldX + vx);
-
-        double targetY =
-            LatteWorld.worldToDoomY(worldZ + vz);
+        double currentY =
+            LatteWorld.worldToDoomY(worldZ);
 
         /*
-         * Sweep the item's collision circle through the movement.
-         *
-         * We can hit multiple walls during one tick.
+         * Calculate horizontal movement.
          */
-        for (int iteration = 0; iteration < MAX_WALL_ITERATIONS; iteration++) {
+        double targetX =
+            LatteWorld.worldToDoomX(
+                worldX + vx
+            );
 
-            double moveX = targetX - currentX;
-            double moveY = targetY - currentY;
+        double targetY =
+            LatteWorld.worldToDoomY(
+                worldZ + vz
+            );
+
+        /*
+         * Resolve wall collisions.
+         */
+        for (int iteration = 0;
+             iteration < MAX_WALL_ITERATIONS;
+             iteration++) {
+
+            double moveX =
+                targetX - currentX;
+
+            double moveY =
+                targetY - currentY;
 
             if (Math.hypot(moveX, moveY) < EPSILON) {
                 break;
             }
 
-            WallHit hit = findCircleSweepHit(
-                map,
-                currentX,
-                currentY,
-                targetX,
-                targetY
-            );
+            WallHit hit =
+                findCircleSweepHit(
+                    map,
+                    currentX,
+                    currentY,
+                    targetX,
+                    targetY
+                );
 
             if (hit == null) {
                 currentX = targetX;
@@ -150,33 +171,35 @@ public final class ItemCollision {
                 break;
             }
 
-
-//i dont know why the player cant pick up items as steve
-//i based this code on doomCollision.java because i am still very new to making minecraft mods
-
-
             /*
-             * Move to just before the collision.
+             * Move up to the collision.
              */
             double safeFraction =
-                Math.max(0.0, hit.fraction - 0.0005);
+                Math.max(
+                    0.0,
+                    hit.fraction - 0.0005
+                );
 
-            currentX += moveX * safeFraction;
-            currentY += moveY * safeFraction;
+            currentX +=
+                moveX * safeFraction;
 
-            /*
-             * Push the item away from the wall.
-             *
-             * This is important because simply stopping at the collision
-             * point can leave the radius partially inside the wall.
-             */
-            currentX += hit.normalX * WALL_SKIN;
-            currentY += hit.normalY * WALL_SKIN;
+            currentY +=
+                moveY * safeFraction;
 
             /*
-             * Remaining movement after the collision.
+             * Separate from wall.
              */
-            double remaining = 0.9 - safeFraction;
+            currentX +=
+                hit.normalX * WALL_SKIN;
+
+            currentY +=
+                hit.normalY * WALL_SKIN;
+
+            /*
+             * Remaining movement.
+             */
+            double remaining =
+                1.0 - safeFraction;
 
             if (remaining <= EPSILON) {
                 targetX = currentX;
@@ -184,31 +207,30 @@ public final class ItemCollision {
                 break;
             }
 
-            /*
-             * Calculate the movement that remains.
-             */
-            double remainingX = moveX * remaining;
-            double remainingY = moveY * remaining;
+            double remainingX =
+                moveX * remaining;
+
+            double remainingY =
+                moveY * remaining;
 
             /*
-             * Remove the component pointing INTO the wall.
-             *
-             * Tangential velocity remains, producing natural sliding.
+             * Remove movement going into the wall.
              */
             double intoWall =
                 remainingX * hit.normalX
                 + remainingY * hit.normalY;
 
             if (intoWall < 0.0) {
-                remainingX -= hit.normalX * intoWall;
-                remainingY -= hit.normalY * intoWall;
+
+                remainingX -=
+                    hit.normalX * intoWall;
+
+                remainingY -=
+                    hit.normalY * intoWall;
             }
 
             /*
-             * Do the same thing to actual item velocity.
-             *
-             * This is what makes thrown items preserve their velocity
-             * when they scrape along a wall.
+             * Apply the same sliding behavior to velocity.
              */
             double doomVelocityX =
                 worldDeltaToDoomX(vx);
@@ -221,6 +243,7 @@ public final class ItemCollision {
                 + doomVelocityY * hit.normalY;
 
             if (velocityIntoWall < 0.0) {
+
                 doomVelocityX -=
                     hit.normalX * velocityIntoWall;
 
@@ -228,23 +251,34 @@ public final class ItemCollision {
                     hit.normalY * velocityIntoWall;
             }
 
-            vx = doomDeltaToWorldX(doomVelocityX);
-            vz = doomDeltaToWorldZ(doomVelocityY);
+            vx =
+                doomDeltaToWorldX(
+                    doomVelocityX
+                );
 
-            /*
-             * Continue the remaining movement.
-             */
-            targetX = currentX + remainingX;
-            targetY = currentY + remainingY;
+            vz =
+                doomDeltaToWorldZ(
+                    doomVelocityY
+                );
+
+            targetX =
+                currentX + remainingX;
+
+            targetY =
+                currentY + remainingY;
         }
 
-        worldX = doomToWorldX(currentX);
-        worldZ = doomToWorldZ(currentY);
+        /*
+         * Convert Doom coordinates back to Minecraft.
+         */
+        worldX =
+            doomToWorldX(currentX);
+
+        worldZ =
+            doomToWorldZ(currentY);
 
         /*
-         * Final sector correction.
-         *
-         * The item may have crossed a sector boundary during a wall slide.
+         * Recalculate the sector after horizontal movement.
          */
         double finalDoomX =
             LatteWorld.worldToDoomX(worldX);
@@ -253,7 +287,10 @@ public final class ItemCollision {
             LatteWorld.worldToDoomY(worldZ);
 
         int finalSector =
-            map.sectorAt(finalDoomX, finalDoomY);
+            map.sectorAt(
+                finalDoomX,
+                finalDoomY
+            );
 
         if (finalSector >= 0) {
 
@@ -267,25 +304,47 @@ public final class ItemCollision {
                     map.ceilNow(finalSector)
                 );
 
-            if (worldY <= finalFloor + WALL_SKIN && vy <= 0.0) {
-                worldY = finalFloor;
+            /*
+             * Final floor correction.
+             */
+            if (worldY <= finalFloor + ITEM_FLOOR_OFFSET + WALL_SKIN
+                && vy <= 0.0) {
+
+                worldY =
+                    finalFloor + ITEM_FLOOR_OFFSET;
+
                 vy = 0.0;
 
                 item.setOnGround(true);
             }
 
-            if (worldY >= finalCeiling - WALL_SKIN && vy > 0.0) {
-                worldY = finalCeiling;
+            /*
+             * Final ceiling correction.
+             */
+            if (worldY >= finalCeiling - WALL_SKIN
+                && vy > 0.0) {
+
+                worldY =
+                    finalCeiling - WALL_SKIN;
+
                 vy = 0.0;
             }
         }
 
+        /*
+         * Update the actual Minecraft entity position.
+         *
+         * setPos() also updates the entity bounding box.
+         */
         item.setPos(
             worldX,
             worldY,
             worldZ
         );
 
+        /*
+         * Keep vanilla's velocity synchronized.
+         */
         item.setDeltaMovement(
             vx,
             vy,
@@ -295,19 +354,6 @@ public final class ItemCollision {
         return true;
     }
 
-    /*
-     * Sweeps a circle against every solid Doom wall.
-     *
-     * Unlike the old implementation, this detects:
-     *
-     *   - direct wall hits
-     *   - angled hits
-     *   - glancing hits
-     *   - corner hits
-     *   - endpoint hits
-     *   - very short movement segments
-     *   - tunneling caused by high throw velocity
-     */
     private static WallHit findCircleSweepHit(
             DoomMap map,
             double x1,
@@ -323,13 +369,14 @@ public final class ItemCollision {
                 continue;
             }
 
-            WallHit hit = sweepCircleAgainstLine(
-                x1,
-                y1,
-                x2,
-                y2,
-                line
-            );
+            WallHit hit =
+                sweepCircleAgainstLine(
+                    x1,
+                    y1,
+                    x2,
+                    y2,
+                    line
+                );
 
             if (hit == null) {
                 continue;
@@ -345,35 +392,18 @@ public final class ItemCollision {
         return closest;
     }
 
-    private static boolean isSolid(DoomMap.Line line) {
+    private static boolean isSolid(
+            DoomMap.Line line) {
 
-        /*
-         * One-sided linedefs are solid.
-         */
         if (line.frontSector() < 0
             || line.backSector() < 0) {
 
             return true;
         }
 
-        /*
-         * Doom BLOCKING flag.
-         */
         return (line.flags() & 0x1) != 0;
     }
 
-    /*
-     * Sweeps a circle against a line segment.
-     *
-     * The collision is found by checking:
-     *
-     * 1. The infinite line around the wall.
-     * 2. The finite wall segment.
-     * 3. Both wall endpoints as circles.
-     *
-     * This is substantially more robust than a simple
-     * segment/segment intersection.
-     */
     private static WallHit sweepCircleAgainstLine(
             double x1,
             double y1,
@@ -383,16 +413,24 @@ public final class ItemCollision {
 
         double ax = line.x1();
         double ay = line.y1();
+
         double bx = line.x2();
         double by = line.y2();
 
-        double wallX = bx - ax;
-        double wallY = by - ay;
+        double wallX =
+            bx - ax;
+
+        double wallY =
+            by - ay;
 
         double wallLength =
-            Math.hypot(wallX, wallY);
+            Math.hypot(
+                wallX,
+                wallY
+            );
 
         if (wallLength < EPSILON) {
+
             return sweepCircleAgainstPoint(
                 x1,
                 y1,
@@ -403,20 +441,20 @@ public final class ItemCollision {
             );
         }
 
-        double nx = -wallY / wallLength;
-        double ny = wallX / wallLength;
+        double nx =
+            -wallY / wallLength;
 
-        double moveX = x2 - x1;
-        double moveY = y2 - y1;
+        double ny =
+            wallX / wallLength;
+
+        double moveX =
+            x2 - x1;
+
+        double moveY =
+            y2 - y1;
 
         WallHit best = null;
 
-        /*
-         * Determine which side of the wall the item starts on.
-         *
-         * This prevents the sweep from immediately detecting the
-         * "back side" of the expanded wall.
-         */
         double startDistance =
             (x1 - ax) * nx
             + (y1 - ay) * ny;
@@ -425,9 +463,6 @@ public final class ItemCollision {
             moveX * nx
             + moveY * ny;
 
-        /*
-         * Test both offset surfaces of the wall.
-         */
         double[] offsets = {
             ITEM_RADIUS,
             -ITEM_RADIUS
@@ -435,10 +470,6 @@ public final class ItemCollision {
 
         for (double offset : offsets) {
 
-            /*
-             * If we're already inside this expanded surface,
-             * don't create a fake collision at t=0.
-             */
             double distance =
                 startDistance - offset;
 
@@ -449,7 +480,9 @@ public final class ItemCollision {
             double t =
                 -distance / direction;
 
-            if (t < -EPSILON || t > 1.0 + EPSILON) {
+            if (t < -EPSILON
+                || t > 1.0 + EPSILON) {
+
                 continue;
             }
 
@@ -461,12 +494,11 @@ public final class ItemCollision {
             double hitY =
                 y1 + moveY * t;
 
-            /*
-             * Project collision point onto the wall.
-             */
             double along =
-                (hitX - ax) * (wallX / wallLength)
-                + (hitY - ay) * (wallY / wallLength);
+                (hitX - ax)
+                    * (wallX / wallLength)
+                + (hitY - ay)
+                    * (wallY / wallLength);
 
             if (along < -ITEM_RADIUS
                 || along > wallLength + ITEM_RADIUS) {
@@ -475,7 +507,9 @@ public final class ItemCollision {
             }
 
             double normalSign =
-                offset >= 0.0 ? 1.0 : -1.0;
+                offset >= 0.0
+                    ? 1.0
+                    : -1.0;
 
             double hitNormalX =
                 nx * normalSign;
@@ -483,9 +517,6 @@ public final class ItemCollision {
             double hitNormalY =
                 ny * normalSign;
 
-            /*
-             * Only collide if movement is entering the wall.
-             */
             double approach =
                 moveX * hitNormalX
                 + moveY * hitNormalY;
@@ -503,18 +534,13 @@ public final class ItemCollision {
                 );
 
             if (best == null
-                || candidate.fraction < best.fraction) {
+                || candidate.fraction
+                    < best.fraction) {
 
                 best = candidate;
             }
         }
 
-        /*
-         * Endpoint tests are extremely important.
-         *
-         * Without these, the item's radius can cut around the end
-         * of a wall even though the actual circle hits the corner.
-         */
         WallHit startPointHit =
             sweepCircleAgainstPoint(
                 x1,
@@ -527,7 +553,8 @@ public final class ItemCollision {
 
         if (startPointHit != null
             && (best == null
-                || startPointHit.fraction < best.fraction)) {
+                || startPointHit.fraction
+                    < best.fraction)) {
 
             best = startPointHit;
         }
@@ -544,7 +571,8 @@ public final class ItemCollision {
 
         if (endPointHit != null
             && (best == null
-                || endPointHit.fraction < best.fraction)) {
+                || endPointHit.fraction
+                    < best.fraction)) {
 
             best = endPointHit;
         }
@@ -552,11 +580,6 @@ public final class ItemCollision {
         return best;
     }
 
-    /*
-     * Sweeps the item's circle against a single point.
-     *
-     * This is effectively a ray vs circle test.
-     */
     private static WallHit sweepCircleAgainstPoint(
             double x1,
             double y1,
@@ -565,11 +588,17 @@ public final class ItemCollision {
             double px,
             double py) {
 
-        double dx = x2 - x1;
-        double dy = y2 - y1;
+        double dx =
+            x2 - x1;
 
-        double fx = x1 - px;
-        double fy = y1 - py;
+        double dy =
+            y2 - y1;
+
+        double fx =
+            x1 - px;
+
+        double fy =
+            y1 - py;
 
         double a =
             dx * dx
@@ -580,7 +609,10 @@ public final class ItemCollision {
         }
 
         double b =
-            2.0 * (fx * dx + fy * dy);
+            2.0 * (
+                fx * dx
+                + fy * dy
+            );
 
         double c =
             fx * fx
@@ -599,14 +631,19 @@ public final class ItemCollision {
             Math.sqrt(discriminant);
 
         double t1 =
-            (-b - sqrt) / (2.0 * a);
+            (-b - sqrt)
+                / (2.0 * a);
 
         double t2 =
-            (-b + sqrt) / (2.0 * a);
+            (-b + sqrt)
+                / (2.0 * a);
 
-        double t = Double.POSITIVE_INFINITY;
+        double t =
+            Double.POSITIVE_INFINITY;
 
-        if (t1 >= -EPSILON && t1 <= 1.0 + EPSILON) {
+        if (t1 >= -EPSILON
+            && t1 <= 1.0 + EPSILON) {
+
             t = t1;
         }
 
@@ -636,31 +673,35 @@ public final class ItemCollision {
             hitY - py;
 
         double length =
-            Math.hypot(normalX, normalY);
+            Math.hypot(
+                normalX,
+                normalY
+            );
 
         if (length < EPSILON) {
-            /*
-             * The center is exactly on the endpoint.
-             *
-             * Use the opposite movement direction as the normal.
-             */
+
             length =
-                Math.hypot(dx, dy);
+                Math.hypot(
+                    dx,
+                    dy
+                );
 
             if (length < EPSILON) {
                 return null;
             }
 
-            normalX = -dx / length;
-            normalY = -dy / length;
+            normalX =
+                -dx / length;
+
+            normalY =
+                -dy / length;
+
         } else {
+
             normalX /= length;
             normalY /= length;
         }
 
-        /*
-         * Only report an actual approaching collision.
-         */
         double approach =
             dx * normalX
             + dy * normalY;
@@ -677,17 +718,21 @@ public final class ItemCollision {
         );
     }
 
-    private static double clamp01(double value) {
+    private static double clamp01(
+            double value) {
+
         return Math.max(
             0.0,
-            Math.min(1.0, value)
+            Math.min(
+                1.0,
+                value
+            )
         );
     }
 
-    /*
-     * Convert a world-space X movement into Doom-space X movement.
-     */
-    private static double worldDeltaToDoomX(double worldDelta) {
+    private static double worldDeltaToDoomX(
+            double worldDelta) {
+
         double a =
             LatteWorld.worldToDoomX(0.0);
 
@@ -697,10 +742,9 @@ public final class ItemCollision {
         return worldDelta * (b - a);
     }
 
-    /*
-     * Convert a world-space Z movement into Doom-space Y movement.
-     */
-    private static double worldDeltaToDoomY(double worldDelta) {
+    private static double worldDeltaToDoomY(
+            double worldDelta) {
+
         double a =
             LatteWorld.worldToDoomY(0.0);
 
@@ -710,14 +754,17 @@ public final class ItemCollision {
         return worldDelta * (b - a);
     }
 
-    private static double doomDeltaToWorldX(double doomDelta) {
+    private static double doomDeltaToWorldX(
+            double doomDelta) {
+
         double a =
             LatteWorld.worldToDoomX(0.0);
 
         double b =
             LatteWorld.worldToDoomX(1.0);
 
-        double scale = b - a;
+        double scale =
+            b - a;
 
         if (Math.abs(scale) < EPSILON) {
             return 0.0;
@@ -726,14 +773,17 @@ public final class ItemCollision {
         return doomDelta / scale;
     }
 
-    private static double doomDeltaToWorldZ(double doomDelta) {
+    private static double doomDeltaToWorldZ(
+            double doomDelta) {
+
         double a =
             LatteWorld.worldToDoomY(0.0);
 
         double b =
             LatteWorld.worldToDoomY(1.0);
 
-        double scale = b - a;
+        double scale =
+            b - a;
 
         if (Math.abs(scale) < EPSILON) {
             return 0.0;
@@ -742,32 +792,42 @@ public final class ItemCollision {
         return doomDelta / scale;
     }
 
-    private static double doomToWorldX(double doomX) {
+    private static double doomToWorldX(
+            double doomX) {
+
         double a =
             LatteWorld.worldToDoomX(0.0);
 
         double b =
             LatteWorld.worldToDoomX(1.0);
 
-        if (Math.abs(b - a) < EPSILON) {
+        double scale =
+            b - a;
+
+        if (Math.abs(scale) < EPSILON) {
             return 0.0;
         }
 
-        return (doomX - a) / (b - a);
+        return (doomX - a) / scale;
     }
 
-    private static double doomToWorldZ(double doomY) {
+    private static double doomToWorldZ(
+            double doomY) {
+
         double a =
             LatteWorld.worldToDoomY(0.0);
 
         double b =
             LatteWorld.worldToDoomY(1.0);
 
-        if (Math.abs(b - a) < EPSILON) {
+        double scale =
+            b - a;
+
+        if (Math.abs(scale) < EPSILON) {
             return 0.0;
         }
 
-        return (doomY - a) / (b - a);
+        return (doomY - a) / scale;
     }
 
     private record WallHit(
