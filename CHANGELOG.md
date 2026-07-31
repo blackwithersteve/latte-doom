@@ -1,5 +1,45 @@
 # Changelog
 
+## [0.50.0-alpha] - 2026-07-31
+
+### Added
+
+- Savegames: six slots in the menu, kept separately per WAD combination.
+- Mouse support in the menus.
+- A WAD selection page in the menu.
+- Standalone `.deh` and `.bex` file support.
+- The sky renders as real geometry.
+- An Options page: screen size, light boost, sound volume, and a Crispness page
+  ported from Crispy Doom.
+- Gamma correction on F10 and `/doomgamma`.
+- Three status bar sizes.
+- Sound and music volume sliders.
+- Level stats, messages and pickup lines in the WAD's small font.
+- The automap fills the screen.
+- An experimental BSP-accurate mesh behind `/bsp`.
+- Headless verification tasks for saves, bosses, DEHACKED and the mesh.
+
+### Changed
+
+- Entering a level transforms the player; leaving reverts it. `/doommarine` toggles
+  the form inside a level only.
+- Menus pause the game in singleplayer.
+- Loading a WAD set closes the menu.
+- Weapon sprites sit at the original heights, with a smoother bob.
+- Free look can be turned off.
+
+### Fixed
+
+- Engine sounds played far too quiet.
+- Intermission sounds played twice.
+- Saving could crash the engine.
+- Entering a level flashed damage that was never taken.
+- DEHACKED weapon patches could crash weapon raising.
+- The menu sliders showed seams in windowed mode.
+- A rebooted engine could keep playing the previous level's audio.
+- DEHACKED patches persisted into the next game loaded.
+- Music volume topped out too low.
+
 ## [0.42.0-alpha] - 2026-07-26
 
 ### Fixed
