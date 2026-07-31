@@ -11,27 +11,18 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Headless gate for the sector triangulator. Runs every map of a WAD and checks:
- * <ol>
- *   <li><b>Area</b>: triangulated area per map against the BSP-fragment
- *       reconstruction, which under-covers by the slivers it drops, so a small positive
- *       delta is expected.</li>
- *   <li><b>Watertightness</b>: every boundary edge of a sector's triangulation (an edge
- *       used by exactly one triangle) must lie on a linedef of that sector, so the floor
- *       rim coincides with the wall base and gaps are impossible by construction.</li>
- *   <li><b>Triangle counts</b> against the flat-quad reconstruction, as a cost measure.</li>
- * </ol>
- * Exits 0 only if every map passes.
- *
- * <p>Run with: {@code ./gradlew triProbe -Pwad=/path/to/DOOM.WAD [-Pmap=E1M1]}
+ * Headless gate for the sector triangulator: runs every map of a WAD and checks
+ *  (1) AREA — new triangle area per map vs the legacy BSP-fragment reconstruction
+ *      (which UNDER-covers by its dropped slivers; small positive delta expected),
+ *  (2) WATERTIGHT — every boundary edge of a sector's triangulation (an edge used by
+ *      exactly ONE triangle) must lie ON a linedef of that sector: the floor rim IS the
+ *      wall base, gaps impossible by construction,
+ *  (3) triangle counts vs the legacy flat-quad counts (the performance headline).
+ * Exit code 0 only if every map passes. Run: gradlew triProbe [-Pwad=...] [-Pmap=ExMy]
  */
 public final class TriProbe {
 
     public static void main(String[] args) throws Exception {
-        if (args.length == 0 || args[0].isEmpty()) {
-            System.err.println("TriProbe: pass a WAD path (gradle: -Pwad=/path/to/DOOM.WAD)");
-            System.exit(2);
-        }
         final WadFile wad = WadFile.read(Path.of(args[0]));
         final List<String> maps = args.length > 1 && !args[1].isEmpty()
             ? List.of(args[1]) : wad.mapNames();
@@ -77,7 +68,7 @@ public final class TriProbe {
         final double delta = oldArea > 0 ? (newArea - oldArea) / oldArea * 100.0 : 0;
 
         // (2) watertight: boundary edges must lie on a linedef of their sector. Sectors on
-        // the BSP fallback (unclosed-boundary map defects) are exempt: their geometry is
+        // the BSP fallback (unclosed-boundary map defects) are exempt — their geometry is
         // broken in the WAD itself; every port special-cases them.
         int openEdges = 0;
         int fallbacks = 0;

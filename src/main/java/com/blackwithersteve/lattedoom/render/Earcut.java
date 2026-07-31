@@ -5,20 +5,16 @@ import java.util.List;
 
 /**
  * Java port of mapbox/earcut (https://github.com/mapbox/earcut), the industry-standard
- * polygon-with-holes triangulator: ISC License, Copyright (c) 2016 Mapbox. Ported for
+ * polygon-with-holes triangulator — ISC License, Copyright (c) 2016 Mapbox. Ported for
  * Latte Doom from the upstream main-branch earcut.js.
  *
- * <p>Two deliberate deviations from upstream, both safe for the small integer-coordinate
- * polygons a DOOM sector produces:
- * <ol>
- *   <li>The z-order-curve ear hashing and the hole-bridge block index are omitted. Both
- *       are performance features for very large polygons.</li>
- *   <li>{@code filterPoints} removes only coincident points, not collinear ones. Upstream
- *       drops collinear vertices as redundant, but every boundary vertex must survive here
- *       so that wall quads, which are built per linedef, share the floor rim's vertices
- *       exactly; that identity is what makes the geometry watertight. The stall handling
- *       (cure and split) still terminates without the collinear filter.</li>
- * </ol>
+ * Deliberate deviations from upstream, both safe for our small integer-coordinate inputs:
+ * 1. The z-order-curve ear hashing and the hole-bridge block index are omitted (pure
+ *    performance features for huge polygons; DOOM sectors are tiny).
+ * 2. {@code filterPoints} removes only COINCIDENT points, not collinear ones. Upstream
+ *    drops collinear vertices as redundant; we must keep every boundary vertex so that
+ *    wall quads (built per linedef) share the floor rim's vertices EXACTLY — Latte Doom's
+ *    watertight-geometry contract. The stall cascade (cure + split) still terminates.
  */
 final class Earcut {
 
@@ -82,8 +78,8 @@ final class Earcut {
     }
 
     /**
-     * Removes coincident points only. Upstream also removes collinear points, but those
-     * boundary vertices are required for watertight geometry; see the class documentation.
+     * Upstream removes collinear AND coincident points; we remove ONLY coincident ones
+     * (see class doc — collinear boundary vertices are load-bearing for watertightness).
      */
     private Node filterPoints(Node start, Node end) {
         final boolean full = end == null || end == start;

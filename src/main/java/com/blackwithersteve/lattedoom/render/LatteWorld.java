@@ -15,43 +15,40 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * The client-side level: whichever map the engine is running is built as real geometry in
- * the world, at a deterministic origin so that every client places it identically.
+ * The client-side raised level: whichever map the ENGINE is currently running materialises as
+ * true geometry floating 24 blocks above wherever the player stood when it appeared. Everything
+ * here is driven by {@link WorldSnapshot}s — the engine decides which level exists, what every
+ * sector's floor/ceiling height is (doors/lifts move because IT moves them) and what every
+ * sector's light level is (its own p_lights thinkers). This class only mirrors.
  *
- * <p>Everything here is driven by {@link WorldSnapshot}. The engine decides which level
- * exists, what each sector's floor and ceiling heights are, so doors and lifts move because
- * it moves them, and what each sector's light level is, from its own light thinkers. This
- * class only mirrors that state; it never simulates.
- *
- * <p>It also owns the interpolation clock that keeps 35 Hz engine motion smooth at the
- * display's frame rate, the player-mirroring handshake, and the transformations between map
- * coordinates and world coordinates.
- *
- * <p>All state is touched exclusively on the Minecraft client thread, during the tick and
- * the render pass.
+ * All state is touched exclusively on the MC client thread (tick + render).
  */
 public final class LatteWorld {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("lattedoom");
 
-    /** Map units per Minecraft block, used by every coordinate transform. At 28, DOOM's
-     * 56-unit player height is exactly 2 blocks and a 24-unit step is 0.86, so a Minecraft
-     * player fits through everything the original does. */
+    /**
+     * THE scale: DOOM units per Minecraft block, the single constant every transform uses.
+     * The rule: size the world so a ~2-block Minecraft player fits
+     * DOOM's spaces naturally — 28 u/block puts the 56u marine at exactly 2.0 blocks
+     * (doors 2.6-4.6 blocks, 24u steps 0.86); Steve at 1.8 clears everything comfortably.
+     */
     public static final double UNITS = 28.0;
 
-    /** Cache identifier for the current WAD set. It is generational: changing the WAD set
-     * increments it, so every cache derived from a WAD: the merged file, the sprite table
-     * and the GPU textures, all keyed by this identifier: reloads lazily from the new set
-     * rather than serving the previous one. */
+    /** Cache id for the current IWAD+PWAD set. GENERATIONAL: /doomwad bumps it, so every
+     * WAD-derived cache (merged wad, sprites, GPU textures keyed by this id) reloads
+     * lazily from the NEW set instead of serving the old one. */
     private static int wadGeneration;
 
     public static String wadId() {
         return "iwad-g" + wadGeneration;
     }
 
-    /** Incremented whenever the level origin changes. Stored origin-relative coordinates
-     * refer to the old origin once it does, so holders must re-seed or they displace the
-     * player by the difference. */
+    /** Bumped every time the level ORIGIN is redefined (load/reload). The marine
+     * integrator keys its keyframes to this: a stale epoch means every stored
+     * origin-relative coordinate is garbage and physics must re-seed at the player —
+     * the flight recorder caught a suit-level load RE-BASING the origin mid-flight and
+     * the integrator "moving" the standing player 491 blocks into the sky. */
     private static int originEpoch;
 
     public static int originEpoch() {
@@ -84,8 +81,8 @@ public final class LatteWorld {
         return WadFile.loadMerged(wadId(), iwadPath, pwads);
     }
 
-    /** The native shell (menu/intermission/finale screens) needs the WAD's UI art even
-     * before any level ever loaded: e.g. pressing M on a fresh client. Registers lazily
+    /** The NATIVE shell (menu/intermission/finale screens) needs the WAD's UI art even
+     * before any level ever loaded — e.g. pressing M on a fresh client. Registers lazily
      * on the client tick (the safe GL slot); cheap no-op once the set is loaded. */
     public static void ensureUiAssets(Minecraft mc, java.nio.file.Path iwadPath) {
         if (iwadPath == null || mc.level == null) {
@@ -104,14 +101,14 @@ public final class LatteWorld {
     private static DoomMap map;
     /** The WAD's sprite table (frame/rotation/flip), built once per WAD. */
     private static SpriteSet sprites;
-    /** Static sector triangulation (x,y only; heights applied at bake): built once per map. */
+    /** Static sector triangulation (x,y only; heights applied at bake) — built once per map. */
     private static SectorTriangulator.Result tri;
     private static double cx, cy; // doom-space map centre, the mesh transform origin
-    private static String mapName;        // "e5m1", which level the mesh currently is
+    private static String mapName;        // "e5m1" — which level the mesh currently is
     private static String failedMap;      // a map that failed to load: don't retry every tick
     /** Per-sector baked quad batches (texture key -> packed 6-float vertices). */
     private static Map<Integer, Map<String, float[]>> groups;
-    /** Per-sector mesh-local AABB {minX,minY,minZ,maxX,maxY,maxZ}: for frustum culling.
+    /** Per-sector mesh-local AABB {minX,minY,minZ,maxX,maxY,maxZ} — for frustum culling.
      * Kept in step with {@link #groups} (rebuilt on load + every mover rebake). */
     private static Map<Integer, double[]> sectorBounds;
 
@@ -138,49 +135,48 @@ public final class LatteWorld {
     private static double originX, originY, originZ;
     /** Sector adjacency (shared lines), cached per map for the moving-neighbor rebakes. */
     private static int[][] neighbors;
-    /** Sectors whose static bake is stale; re-baked when they stop moving (not per tic). */
+    /** Sectors whose STATIC bake is stale; re-baked when they stop moving (not per tic). */
     private static final Set<Integer> dirtyRebake = new HashSet<>();
-    /** Sector -> indices into map.lines of every linedef touching it (front OR back side).
+    /** sector -> indices into map.lines of every linedef touching it (front OR back side).
      * Precomputed once at load so the per-frame mover bake ({@link #bakeInterp}) walks a
      * handful of lines instead of rescanning the whole level's linedefs every sector, every frame. */
     private static int[][] sectorLines;
     /** The level's vertical envelope (authored extremes), for the inside-the-level test. */
     private static int minFloorH, maxCeilH;
-    // ---- mover interpolation: the engine's last three 35Hz keyframes per sector: the
-    // rendered glide runs one tic behind (prev2 -> prev) so a late-arriving tic never
+    // ---- mover interpolation: the engine's last THREE 35Hz keyframes per sector — the
+    // RENDERED glide runs one tic behind (prev2 -> prev) so a late-arriving tic never
     // stalls a door mid-motion; collision keeps the freshest heights (cur) ----
     private static double[] prevFloor2, prevCeil2, prevFloor, prevCeil, curFloor, curCeil;
     private static int lastTic = -1;
     private static long ticSeenNanos;
 
-    // Position-change diagnostic: any jump over 10 blocks in one tick is logged with both
-    // positions and the dimension, which covers movers outside this class as well.
+    // WHO-MOVED-ME diagnostic: any >10-block jump in one tick gets logged with both
+    // positions + dimension — catches every mover, including ones outside this class
     private static double diagPX = Double.NaN, diagPY, diagPZ;
     private static String diagDim = "";
 
     /** Called every END_CLIENT_TICK: latch/refresh/drop the level to match the engine. */
     public static void clientTick(Minecraft mc, DoomHost host, Path iwadPath) {
         com.blackwithersteve.lattedoom.diag.DoomDiag.tickPlayer(mc);
-        // Return to the overworld rather than falling forever in the empty level dimension.
-        // This must not fire while a level load is in flight, because the map is legitimately
-        // absent for a few ticks and rescuing then ejects the player just before the incoming
-        // level places them. Three states count as in flight: the engine between levels after
-        // an exit, a start-delivery still pending, and an engine that is still booting. A
-        // booting engine reports hadLevel() false, so the between-levels test alone does not
-        // cover a warp reboot.
+        // Safety net against falling forever in the floorless level dimension: no standing
+        // level, or dropped far below any level envelope, returns the player to the
+        // overworld. It must not fire while a level load is in flight, because the map is
+        // legitimately absent for a few ticks and rescuing then ejects the player just
+        // before the incoming level delivers them. Three states count as in flight: the
+        // engine between levels after an exit, a start-delivery still pending, and an
+        // engine that is still booting. A booting engine reports hadLevel() false, so the
+        // between-levels test alone does not cover a warp reboot.
         final boolean loadInFlight = startTeleport
             || (host != null && host.hadLevel() && host.isBetweenLevels())
-            || (host != null && host.state()
-                == com.blackwithersteve.lattedoom.engine.DoomHost.State.BOOTING);
+            || (host != null && host.state() == com.blackwithersteve.lattedoom.engine.DoomHost.State.BOOTING);
         if (mc.player != null && inLevelDim(mc)
             && (map == null || mc.player.getY() < -64)
             && !loadInFlight) {
             com.blackwithersteve.lattedoom.diag.DoomDiag.logNow("level", String.format(
-                "void rescue -> leaveLevelDim (map=%s y=%.1f)", map != null, mc.player.getY()));
+                "void rescue -> leaveLevelDim (map=%s y=%.1f)", map != null,
+                mc.player.getY()));
             leaveLevelDim(mc);
         } else if (mc.player != null && inLevelDim(mc) && map == null && loadInFlight) {
-            // The rescue was withheld: record which of the in-flight states held it, so a
-            // load that never completes can be told apart from one that did.
             com.blackwithersteve.lattedoom.diag.DoomDiag.rec("level", String.format(
                 "void rescue held: start=%s booting=%s between=%s", startTeleport,
                 host != null && host.state()
@@ -208,9 +204,8 @@ public final class LatteWorld {
         }
         ensureRemoteMarineAssets(mc, iwadPath);
         final WorldSnapshot s = host != null ? host.worldSnapshot() : null;
-        // World vs suit: when someone else's engine owns the shared level, the world is
-        // theirs, from their snapshot feed, and this client's own engine, if one is
-        // running, supplies only weapons and the HUD
+        // WORLD vs SUIT: when someone ELSE's engine owns the shared level, the world is
+        // theirs (their snapshot feed) and our own engine — if any — is just our suit
         // (weapons/ammo/HUD). The owner (and solo play) takes the engine path unchanged.
         final boolean worldIsRemote = remoteName != null && remoteOwner != null
             && mc.player != null && !remoteOwner.equals(mc.player.getUUID());
@@ -219,33 +214,35 @@ public final class LatteWorld {
             return;
         }
         if (mc.level == null || iwadPath == null || s == null) {
-            // A null snapshot here means the level was completed, not that the engine died:
-            // Crossing an exit moves it to the intermission or finale, where no snapshot is
-            // produced while the next map loads. Tearing the level down now would leave the
-            // player in an empty dimension, so hold instead and wait for the next in-level
-            // snapshot. The hadLevel check matters because a booting engine also passes
-            // through non-level states, and those must not trigger a hold or an advance.
+            // LEVEL COMPLETED, not engine death: crossing an exit puts the engine into the
+            // intermission tally (or the finale), where capture() returns null even though the
+            // engine is alive and loading the next map. Dropping here yanks the geometry and
+            // leaves the player standing in the empty void dim — the statue-freeze + fall-through.
+            // Instead HOLD: keep the standing level, pin the player, and wait for the next
+            // GS_LEVEL snapshot to deliver them to the new map's start.
+            // hadLevel gate: a BOOTING engine (suit boot, /warp reboot) passes through
+            // non-level states too — those must never trigger holds/advances (the
+            // suit-boot teleport bug: a stale warpedIn + boot-init
+            // states set levelAdvancePending and delivered to the suit map's start)
             final boolean inDim = mc.player != null && inLevelDim(mc);
             if (host != null && host.hadLevel() && host.isBetweenLevels()
                 && (warpedIn || inDim)) {
-                // Standing in the level dimension is itself proof of a warped session, so
-                // the flag is restored rather than trusted. If something cleared it during
-                // the transition, the hold and delivery chain continues instead of ejecting.
+                // SELF-HEAL (the E1M1-exit ejection): standing in the level dimension IS
+                // a warped session — whatever cleared the flag mid-transition, restoring
+                // it here keeps the hold + delivery chain alive instead of ejecting.
                 if (!warpedIn) {
                     com.blackwithersteve.lattedoom.diag.DoomDiag.logNow("level",
-                        "between-levels with warpedIn=false while in dim: flag restored");
+                        "between-levels with warpedIn=false while in dim — flag restored");
                     warpedIn = true;
                 }
                 if (host.gamestateKind() == 3) {
-                    // Title, not intermission: the finale ended (episode complete) or the
-                    // player chose End Game in the engine menu. debounced: a transient
-                    // title read during a transition must never eject: only a state that
-                    // holds for half a second is a real adventure end.
+                    // TITLE, not intermission: the finale ended (episode complete) or the
+                    // player chose End Game in the engine menu. DEBOUNCED: a transient
+                    // title read during a transition must never eject — only a state that
+                    // HOLDS for half a second is a real adventure end.
                     if (++titleTicks >= 10) {
                         titleTicks = 0;
-                        // The adventure is over, so the guest-delivery record is cleared:
-                        // the next shared level to arrive counts as a first join again.
-                        guestDeliveredMap = "";
+        guestDeliveredMap = "";
                         leaveLevelDim(mc);
                         drop();
                         suit = null;
@@ -258,15 +255,15 @@ public final class LatteWorld {
                 return;
             }
             if (inDim) {
-                // Falling through here while inside the dim is the ejection precursor:
-                // Record which condition failed before anything is torn down.
+                // falling through here while INSIDE the dim is the ejection precursor —
+                // name the failed gate on tape before anything tears down
                 com.blackwithersteve.lattedoom.diag.DoomDiag.logNow("level", String.format(
                     "null-snap fallthrough IN DIM: warped=%s host=%s hadLevel=%s between=%s",
                     warpedIn, host != null, host != null && host.hadLevel(),
                     host != null && host.isBetweenLevels()));
             }
             suit = null;
-            drop(); // no local engine and no shared level: nothing to stand
+            drop(); // no engine of our own and nothing shared: no level stands
             return;
         }
         suit = s;
@@ -286,9 +283,11 @@ public final class LatteWorld {
                 failedMap = name;
                 return;
             }
-            // A new map went live while an intermission or diagnostic screen was open, and
-            // this is not demo playback: close the screen and deliver the player to the new
-            // map's start. New Game from the menu takes the load path instead.
+            // THE DOOM SHELL, advance lane: a NEW map went live while a DOOM shell screen
+            // was up and it's no demo — the intermission paged into the next level (native
+            // WI screen), or the debug framebuffer screen started a game. Minecraft is the
+            // renderer: close the screen and warp to the fresh map's start. (The native
+            // MENU's New Game warps itself via /load's path; title demos skip via s.demo.)
             if ((mc.gui.screen() instanceof com.blackwithersteve.lattedoom.LatteDoomScreen
                 || mc.gui.screen() instanceof com.blackwithersteve.lattedoom.LatteIntermissionScreen)
                 && !s.demo) {
@@ -297,42 +296,44 @@ public final class LatteWorld {
             }
         }
         if (levelAdvancePending) {
-            // The player was held through the intermission and the next level now stands,
+            // we held the player through the intermission; the next level now stands —
             // deliver them to its P1 start (the same path /doomwarp delivery uses)
             levelAdvancePending = false;
             startTeleport = true;
         }
-        // A start-of-level delivery may only fire for a session that entered a level; an
-        // engine booted only for weapons and the HUD must never consume one. The exception
-        // is a player already standing in the level dimension, which is proof of such a
-        // session, so the flag is restored rather than the delivery dropped.
+        // HARD INVARIANT: a start-delivery may ONLY fire
+        // into a WARPED session. A suit boot (warpedIn false) must never consume one —
+        // whatever stale path set the flag, refusing here makes the teleport impossible.
+        // EXCEPTION: the player physically standing in the level dimension IS a warped
+        // session — restore the flag and deliver, else a mid-transition flag loss
+        // strands them outside the level.
         if (startTeleport && !warpedIn) {
             if (mc.player != null && inLevelDim(mc)) {
                 LOGGER.warn("startTeleport without warpedIn but player IS in the level dim"
-                    + ": flag restored, delivering");
+                    + " — flag restored, delivering");
                 warpedIn = true;
             } else {
-                LOGGER.warn("startTeleport was set WITHOUT warpedIn: dropped (stale flag)");
+                LOGGER.warn("startTeleport was set WITHOUT warpedIn — dropped (stale flag)");
                 startTeleport = false;
             }
         }
         if (startTeleport && warpedIn && mc.player != null && map != null) {
             final com.blackwithersteve.lattedoom.engine.WorldSnapshot cs = snap;
-            // Death-restart wait: the engine has not reloaded yet, so this snapshot still
-            // belongs to the instance the player died in. The request stays pending and is
-            // consumed off the first snapshot from a new instance.
+            // DEATH-RESTART WAIT: the engine hasn't actually reloaded yet — this snapshot
+            // still belongs to the instance we died in. Keep the flag armed and deliver
+            // off the first fresh-instance snapshot instead of the death spot.
             if (deliverAfterEpoch != 0 && cs != null && cs.levelEpoch == deliverAfterEpoch) {
                 return;
             }
             deliverAfterEpoch = 0;
-            // /doomwarp delivery: fires even when the same map was already standing.
-            // The level lives in its own void dimension: this both delivers the player to
-            // the P1 start and moves them out of the overworld, so nothing else renders.
+            // /doomwarp delivery — fires even when the same map was already standing.
+            // The level lives in its OWN void dimension: this both delivers the player to
+            // the P1 start AND moves them out of the overworld, so nothing else renders.
             startTeleport = false;
-            // Deliver the player to where the engine spawned them, never to a
-            // start position parsed from the map. Boom-format maps commonly contain extra
-            // player-1 starts inside sealed closets, used to drive scripted effects, and
-            // only the engine knows which of them is the real one.
+            // deliver to where the ENGINE actually spawned the player — never a parsed
+            // start. Boom maps carry EXTRA player-1 starts in voodoo-doll closets
+            // (delivering to a parsed start can land the player in a doll closet); the engine knows
+            // which start is the real one, the THINGS lump does not.
             double[] start = null;
             if (cs != null && cs.playerMobj >= 0) {
                 start = new double[]{doomToWorldX(cs.px), doomToWorldH(cs.pz), doomToWorldZ(cs.py)};
@@ -342,38 +343,58 @@ public final class LatteWorld {
             }
             if (start != null) {
                 enterLevelDim(mc, start[0], start[1] + 0.1, start[2]);
-                // Mute the mirror while the server teleport settles, and re-seed the
-                // crossing tracker: a line traced from the pre-delivery spot to the new
+                // mute the mirror while the server teleport settles, and re-seed the
+                // crossing tracker — a line traced from the PRE-delivery spot to the new
                 // start would fire every special between them
                 mirrorHoldTicks = 2;
                 lastMirrorX = Double.NaN;
                 lastEngineX = Double.NaN;
                 com.blackwithersteve.lattedoom.play.DoomMovement.forceReseed();
+                // The delivery IS the transformation; leaveAndClear() is the reverse.
+                // Outside a level there is no transformed play.
+                if (!marineForm && spritesReady()) {
+                    setMarineForm(true);
+                    if (mc.player != null) {
+                        mc.player.refreshDimensions();
+                    }
+                }
             }
         }
-        // Announcing the level is what makes the server route other players' hits to this
-        // client's engine. The announcement on load only fires when the map name changes, and
-        // a player can enter a level that was already raised, so claim ownership here as soon
-        // as they are genuinely in one. Idempotent, and skipped for spectators.
+        // ANNOUNCE RECONCILE: sendLevelUp is what sets the server's level OWNER, and the
+        // server routes plain-Steve's Minecraft->DOOM hits (DoomHitC2S) to that owner. warpedIn
+        // can turn true AFTER the map was already raised — a /doommarine suit-boot raises the
+        // map with warpedIn=false (deliberately no announce), then /doomstart warps us in.
+        // load() only announces on a map-NAME change, so that later warp-in never claimed the
+        // level and every plain-Steve fist/arrow got dropped. Claim it here the moment we're
+        // genuinely in-level (owner-only: remote spectators returned above), idempotent via
+        // announcedLevel; a pure overworld suit-boot stays warpedIn=false and is skipped.
         if (warpedIn && !announcedLevel && map != null && mapName != null) {
             com.blackwithersteve.lattedoom.net.LatteNet.sendLevelUp(mapName, originX, originY, originZ);
             announcedLevel = true;
+            if (LatteMesh.bspMode() && mc.player != null) {
+                // the experimental renderer must never be silently on: it once sat
+                // enabled across days of play and its known divergences read as bugs
+                mc.player.sendSystemMessage(net.minecraft.network.chat.Component.literal(
+                    "§6bsp mesh:§f experimental renderer active. §e/bsp§f turns it off."));
+            }
         }
         // (height sync moved to renderSync(): sampling the 35Hz engine on the 20Hz client
-        // tick made doors step unevenly: the renderer advances keyframes per FRAME instead)
+        // tick made doors step unevenly — the renderer advances keyframes per FRAME instead)
 
-        // Mirror the player into the engine so it senses them, fire any special lines their
-        // movement crossed, and follow teleports back the other way. Demo playback is
-        // excluded, since mirroring would overwrite the recorded player.
+        // AUTO-possession — standing in the level IS being possessed, no command: inside the
+        // level, the engine sees YOU. Demo playback is excluded (spectating must not stomp
+        // the recorded player). Mirror the MC player in, detect special-line crossings along
+        // the movement (fired via the engine's own handler), and honor TELEPORTS coming back
+        // the other way (the engine moved our mobj -> snap the MC player to the destination).
         playMode = mc.player != null && mapName != null && map != null
             && s != null && !s.demo
             && insideLevel(mc.player.getX(), mc.player.getY(), mc.player.getZ());
         if (playMode && mc.player != null && mapName != null) {
             final com.blackwithersteve.lattedoom.engine.WorldSnapshot s2 = snap;
-            // Authoritative teleport follow: the engine counts every real teleport of the
+            // AUTHORITATIVE TELEPORT FOLLOW: the engine counts every real teleport of the
             // local player. Count moved -> snap, whatever the distance (the old >128-unit
-            // heuristic missed short hops, where the teleport fog appeared but the player
-            // stayed put. A new level instance adopts the count without acting on it.
+            // heuristic missed short hops: "you see the teleport animation but you don't
+            // teleport"). A NEW level instance adopts the count without firing.
             if (s2 != null) {
                 if (s2.levelEpoch != seenLevelEpoch) {
                     seenLevelEpoch = s2.levelEpoch;
@@ -385,10 +406,9 @@ public final class LatteWorld {
                         final double tea = s2.mAngleDeg[s2.playerMobj];
                         teleportPlayer(mc, doomToWorldX(tex),
                             doomToWorldH(s2.mz[s2.playerMobj]), doomToWorldZ(tey));
-                        // The original turns the player to the destination's facing, and
-                        // they arrive stationary. Boom's silent teleports should carry
-                        // rotated momentum through; that is not implemented, so they also
-                        // arrive stationary.
+                        // vanilla turns you to the destination's facing — so do we, and
+                        // you arrive at a dead stop (silent Boom teleports technically
+                        // carry rotated momentum; disclosed compromise: they stop too)
                         mc.player.setYRot((float) (-(tea + 90.0)));
                         mc.player.setDeltaMovement(net.minecraft.world.phys.Vec3.ZERO);
                         host.setPlayerMirror(true, tex, tey, s2.mz[s2.playerMobj], tea,
@@ -402,9 +422,8 @@ public final class LatteWorld {
                     }
                 }
             }
-            // A start-delivery just fired and the server teleport may still be settling.
-            // One mirror write of the old position, stamped with the fresh epoch, would
-            // overwrite the spawn.
+            // start-delivery just fired: the server teleport may still be settling — one
+            // mirror write of the old spot (fresh epoch!) would clobber the spawn again
             if (mirrorHoldTicks > 0) {
                 mirrorHoldTicks--;
                 return;
@@ -416,10 +435,12 @@ public final class LatteWorld {
             if (s2 != null && s2.playerMobj >= 0 && !Double.isNaN(lastMirrorX)
                 && !Double.isNaN(lastEngineX)) {
                 final double ex = s2.mx[s2.playerMobj], ey = s2.my[s2.playerMobj];
-                // Speed-independent teleport detection: a teleporter moves the engine's
-                // object a long way in one step while the player barely moves, whereas fast
-                // walking moves both together. Comparing the object's jump against the
-                // player's own step avoids false positives while sprinting.
+                // TELEPORT detection, speed-independent: a real DOOM teleporter jumps the
+                // engine mobj a long way in ONE step WHILE the player barely moved. Fast
+                // walking moves both together (the mobj trails the player), so the OLD
+                // absolute ">64 from last mirror" check false-fired during sprints and
+                // yanked the player back (and spammed the log with /tp). Compare the
+                // engine mobj's own jump against the player's own step instead.
                 final double engineJump = Math.hypot(ex - lastEngineX, ey - lastEngineY);
                 final double playerStep = Math.hypot(dx - lastMirrorX, dy - lastMirrorY);
                 if (engineJump > 128 && engineJump > playerStep * 3.0 + 96) {
@@ -452,9 +473,9 @@ public final class LatteWorld {
             lastMirrorX = dx;
             lastMirrorY = dy;
 
-            // Engine damage is charged to the Minecraft health bar at a 5:1 scale, with no
-            // invulnerability frames, since DOOM has none. Medikits and soulspheres heal it
-            // back. Creative and spectator mode are exempt.
+            // the bill for the engine's hits: DOOM hit points -> MC hearts at the /5 scale,
+            // no mercy frames (DOOM has none); medikits/soulspheres heal hearts back.
+            // Creative/spectator shrug it all off like they shrug everything.
             // An engine attack that throws the player upward, most visibly the arch-vile's.
             // Momentum is in map units per tic; Minecraft velocity is blocks per tick.
             final double launch = host.drainLaunch();
@@ -472,26 +493,31 @@ public final class LatteWorld {
             final int heal = host.drainHeal();
             final double[] knock = host.drainKnockback();
             if (dmg > 0 && knock != null && marineForm) {
-                // Marine form: DOOM's own thrust, straight into the momentum integrator
+                // marine form: DOOM's own thrust, straight into the momentum integrator
                 com.blackwithersteve.lattedoom.play.DoomMovement.damageThrust(
                     knock[0] * knock[2], knock[1] * knock[2]);
             }
             if ((dmg > 0 || heal > 0)
                 && !mc.player.getAbilities().invulnerable && !mc.player.isSpectator()) {
-                // Routed through the server rather than the integrated-server shortcut,
-                // which is null on a LAN guest and drops the damage.
+                // via the SERVER, not the integrated-server shortcut: on a LAN GUEST that
+                // shortcut is null and silently ate all engine damage
                 double kx = 0, kz = 0;
                 if (!marineForm && dmg > 0 && knock != null) {
                     kx = knock[0] * 0.4; // doom dir -> world axes: wx = dx, wz = -dy
                     kz = -knock[1] * 0.4;
                 }
+                // The server refuses a bill over 1000 outright rather than clamping it, so
+                // an overkill hit must be capped here or it deals nothing. A telefrag bills
+                // ~10000 in one packet (TNT MAP30's pad grid teleports onto the voodoo
+                // doll); 1000 is five times a full health bar, so the cap changes no
+                // outcome, only keeps the packet inside what the server accepts.
                 com.blackwithersteve.lattedoom.net.LatteNet.sendPlayerDamage(
-                    mc.player.getUUID(), dmg, heal, kx, kz,
+                    mc.player.getUUID(), Math.min(dmg, 1000), Math.min(heal, 1000), kx, kz,
                     shieldCovers(mc, dmg, knock));
             }
-            // The engine consumed DOOM items an untransformed player walked over. Each is
-            // converted through pickups.properties and the server grants the Minecraft
-            // side: health, food or items.
+            // STEVE SCAVENGING (M-CROSSOVER slice A): the engine consumed doom items a
+            // PLAIN player walked over — convert each via pickups.properties and let the
+            // server hand out the Minecraft side (heal/food/items).
             if (!marineForm && !mc.player.isSpectator()) {
                 for (String spr : host.drainScavenge()) {
                     final com.blackwithersteve.lattedoom.PickupConfig.Action a =
@@ -502,12 +528,19 @@ public final class LatteWorld {
                     }
                 }
             }
-            // Damage dealt by Minecraft itself never passes through the engine, so the
-            // status bar would not react to it. Any health loss beyond what the engine
-            // billed this window is reported to it as pain. Engine hits carry a short-lived
-            // credit so their own health loss is not counted twice.
+            // MINECRAFT-side damage on a MARINE (mobs, cactus, another player's sword)
+            // never passes the engine, so the suit didn't flash or grunt. Any heart drop
+            // beyond what the engine billed this window is Minecraft's doing — inject it
+            // as pain (damagecount + plpain). Engine hits carry a short-lived credit so
+            // their own async heart-drop doesn't double-flash.
             final int hpNow = (int) Math.ceil(mc.player.getHealth() * 5.0f);
             engineDmgCredit = Math.min(400, engineDmgCredit + dmg);
+            if (lastHpSeen < 0) {
+                // first tick in play mode: SEED, never compare — the old fixed 200 seed
+                // read a fresh player's 100 as a 100-point hit, so every first level
+                // entry opened with a full-red flash and the big pain grunt
+                lastHpSeen = hpNow;
+            }
             if (marineForm && hpNow < lastHpSeen) {
                 final int drop = lastHpSeen - hpNow;
                 final int covered = Math.min(drop, engineDmgCredit);
@@ -516,49 +549,59 @@ public final class LatteWorld {
                     host.requestPlayerPain(drop - covered);
                 }
             }
-            engineDmgCredit -= engineDmgCredit / 5;
+            engineDmgCredit -= engineDmgCredit / 5; // stale credit fades fast
             lastHpSeen = hpNow;
         } else {
             host.setPlayerMirror(false, 0, 0, 0, 0, 0L);
             lastMirrorX = Double.NaN;
             lastEngineX = Double.NaN;
+            lastHpSeen = -1; // re-seed on the next play-mode entry (warp, restart, load)
         }
-        // Dying inside a level is recorded here. On respawn the map restarts and the
-        // engine's own level initialisation restores the starting weapons, which is what
-        // single-player DOOM does, and the player is delivered to the level's start.
+        // DOOM DEATH LAW (a death must never strand the player in the overworld with a
+        // live suit and no starter kit): dying INSIDE the level marks the death; the moment Minecraft
+        // respawns you, the map restarts fresh — the engine's own InitNew forces the
+        // PST_REBORN kit (fist + pistol + 50 bullets), exactly vanilla single-player —
+        // and the start-delivery drops you at the level's P1 start to try again.
         if (mc.player != null && warpedIn) {
+            // The footprint test alone missed deaths at odd positions — a telefrag lands
+            // the player inside the voodoo doll's closet, and a fall can end outside the
+            // walkable box. The level dimension exists only for level sessions, so any
+            // death inside it is the level's death and must restart the map, wherever the
+            // body ended up.
             if (mc.player.isDeadOrDying()
-                && insideLevel(mc.player.getX(), mc.player.getY(), mc.player.getZ())) {
+                && (mc.player.level().dimension().equals(
+                        com.blackwithersteve.lattedoom.net.LatteNet.DOOM_LEVEL_DIM)
+                    || insideLevel(mc.player.getX(), mc.player.getY(), mc.player.getZ()))) {
                 diedInLevel = true;
             } else if (diedInLevel && !mc.player.isDeadOrDying()) {
                 diedInLevel = false;
                 host.requestMapRestart();
                 startTeleport = true; // deliver to the reborn map's start
-                // The restart happens on the ENGINE thread: hold the delivery until a
-                // snapshot from a new level instance arrives, or the player is delivered
+                // the restart happens on the ENGINE thread: hold the delivery until a
+                // snapshot from a NEW level instance arrives, or we'd deliver the player
                 // straight to his death spot off a pre-restart snapshot
                 deliverAfterEpoch = snap != null ? snap.levelEpoch : 0;
             }
         }
-        // The suit link works wherever the engine runs: weapon switching and the trigger are
-        // not tied to standing inside a level, so a transformed player in the overworld keeps
-        // the weapon.
+        // the suit link works anywhere the engine runs — weapon switching and the
+        // trigger are not tied to standing inside the level
         weaponInput(mc, host);
         com.blackwithersteve.lattedoom.play.DoomCombat.tick(mc, suit); // DOOM guns vs MC mobs/players
         com.blackwithersteve.lattedoom.play.MinecraftCombat.tickArrows(mc); // MC arrows vs demons
         final java.util.List<int[]> sounds = host.drainSounds();
         if (announcedLevel) {
-            com.blackwithersteve.lattedoom.net.LatteNet.sendSnap(s);
-            com.blackwithersteve.lattedoom.net.LatteNet.sendSounds(sounds);
+            com.blackwithersteve.lattedoom.net.LatteNet.sendSnap(s); // the world feed for spectators
+            com.blackwithersteve.lattedoom.net.LatteNet.sendSounds(sounds); // and its soundscape
         }
     }
 
     private static boolean fireWas;
     private static boolean tapFire;
     private static int lastSlot = -1;
+    private static final boolean[] hotbarWasDown = new boolean[7];
     private static g.Signals.ScanCode pendingRelease;
     private static int releaseIn;
-    private static int lastHpSeen = 200;
+    private static int lastHpSeen = -1; // -1 = unseeded (first play-mode tick seeds it)
     private static int engineDmgCredit;
 
     /** A left-click landed (via the cancelled vanilla attack): pull the DOOM trigger
@@ -567,32 +610,53 @@ public final class LatteWorld {
         tapFire = true;
     }
 
-    /** Weapon selection and firing for a transformed player. A hotbar slot change posts the
-     * matching number key, so the scroll wheel works and the engine applies its own rules
-     * about which weapons are owned and loaded. The attack key is forwarded into the
-     * engine's event queue, which fires the weapon with its own ballistics and ammunition. */
+    /**
+     * WEAPON SWITCHING (marine form): hotbar slots 1-7 are the arsenal — a slot change
+     * posts the DOOM number key, so scroll-wheel cycling works naturally and the engine
+     * runs its own weapon-change logic (owned? has ammo?). FIRE: the attack key forwards
+     * into the engine's event queue; G_BuildTiccmd turns it into BT_ATTACK and the engine
+     * fires YOUR weapon with its own ballistics, autoaim, sounds and ammo.
+     */
     private static void weaponInput(Minecraft mc, DoomHost host) {
         if (mc.player == null) {
             return;
         }
-        // Weapon keys have to be held across a tic boundary. A down and up posted in the
-        // same frame arrive in one D_ProcessEvents batch, so G_BuildTiccmd never observes
-        // the key and the switch does not happen.
+        // weapon keys must be HELD across a tic boundary: posting down+up in the same
+        // frame landed in one D_ProcessEvents batch and G_BuildTiccmd never saw the key
+        // — switching silently did nothing ("the marine only has the pistol")
         if (pendingRelease != null) {
             if (--releaseIn <= 0) {
                 host.postKey(pendingRelease, false);
                 pendingRelease = null;
             }
         } else if (marineForm) {
+            final g.Signals.ScanCode[] keys = {
+                g.Signals.ScanCode.SC_1, g.Signals.ScanCode.SC_2, g.Signals.ScanCode.SC_3,
+                g.Signals.ScanCode.SC_4, g.Signals.ScanCode.SC_5, g.Signals.ScanCode.SC_6,
+                g.Signals.ScanCode.SC_7};
+            // The slot keys post on the PRESS, not on the slot change. Minecraft fires no
+            // change when the selected slot's own key is pressed again, and DOOM's slot
+            // semantics live exactly there: 3 again is shotgun <-> super shotgun, 1 again
+            // is fist <-> chainsaw (the engine's own ticcmd builder does the swap). The
+            // slot-change fallback below keeps scroll-wheel switching working.
+            // Observed rather than consumed: vanilla eats the clicks before this tick
+            // runs, and eating them here would stop the hotbar from following.
+            int posted = -1;
+            for (int i = 0; i < 7; i++) {
+                final boolean down = mc.options.keyHotbarSlots[i].isDown();
+                if (down && !hotbarWasDown[i] && posted < 0) {
+                    posted = i;
+                }
+                hotbarWasDown[i] = down;
+            }
             final int slot = mc.player.getInventory().getSelectedSlot();
-            if (slot != lastSlot && slot >= 0 && slot < 7) {
-                final g.Signals.ScanCode[] keys = {
-                    g.Signals.ScanCode.SC_1, g.Signals.ScanCode.SC_2, g.Signals.ScanCode.SC_3,
-                    g.Signals.ScanCode.SC_4, g.Signals.ScanCode.SC_5, g.Signals.ScanCode.SC_6,
-                    g.Signals.ScanCode.SC_7};
-                host.postKey(keys[slot], true);
-                pendingRelease = keys[slot];
-                releaseIn = 2; // ~3.5 tics of hold, long enough for the ticcmd builder
+            if (posted < 0 && slot != lastSlot && slot >= 0 && slot < 7) {
+                posted = slot;
+            }
+            if (posted >= 0) {
+                host.postKey(keys[posted], true);
+                pendingRelease = keys[posted];
+                releaseIn = 2; // ~3.5 doom tics of hold — the ticcmd builder will see it
                 lastSlot = slot;
             }
         }
@@ -606,37 +670,38 @@ public final class LatteWorld {
         }
     }
 
-    /** This tick's resolved trigger state (taps included): presence reuses it. */
+    /** This tick's resolved trigger state (taps included) — presence reuses it. */
     private static boolean fireHeld;
 
     private static double lastMirrorX = Double.NaN, lastMirrorY;
-    // The engine mobj's position last snapshot: for speed-independent teleport detection
+    // the engine mobj's position last snapshot — for speed-independent teleport detection
     private static double lastEngineX = Double.NaN, lastEngineY;
-    // Authoritative teleport follow: the engine counts player teleports and the player is
-    // moved whenever the count changes, with no distance heuristic. A new level instance
-    // adopts the current count without acting on it.
+    // authoritative teleport follow: the engine counts real player teleports; when the
+    // snapshot's count moves we snap, no distance heuristic. Adopted (not fired) on every
+    // new level instance so a fresh epoch's count is never mistaken for a teleport.
     private static long seenLevelEpoch;
     private static int seenTeleportCount;
     /** Ticks to keep the mirror muted after a start-delivery: teleportPlayer goes through
-     * the server, so this tick's mc.player position is still the pre-delivery spot: one
+     * the server, so this tick's mc.player position is still the PRE-delivery spot — one
      * mirror write of it (stamped with the fresh epoch) would clobber the spawn again. */
     private static int mirrorHoldTicks;
-    /** The level epoch at the moment a death restart was requested. The engine restarts on
-     * its own thread, so the start-delivery waits for a snapshot carrying a different epoch;
-     * consuming a pre-restart snapshot delivers the player to the spot where they died. */
+    /** Death-restart wait: the epoch the level had when we requested the restart; the
+     * start-delivery must not consume until a DIFFERENT epoch's snapshot arrives (the
+     * engine restarts on ITS thread — delivering off a pre-restart snapshot dropped the
+     * player at his death spot, tape: enterLevelDim 442.8 in the SIGIL session). */
     private static long deliverAfterEpoch;
     private static boolean startTeleport;
     /** Set while the engine is between levels (intermission/finale); when the next GS_LEVEL
-     * snapshot arrives the player is delivered to the new map's start. */
+     * snapshot arrives we owe the player a delivery to the new map's start. */
     private static boolean levelAdvancePending;
-    /** The player died inside the level; on respawn the map restarts, as in single-player. */
+    /** The MC player died INSIDE the level; on respawn the map restarts (vanilla SP reborn). */
     private static boolean diedInLevel;
-    /** Consecutive between-levels ticks reading title: the adventure-end branch is
+    /** Consecutive between-levels ticks reading TITLE — the adventure-end branch is
      * debounced so a transient title read during a transition can't eject the player. */
     private static int titleTicks;
 
     /** The next level load delivers the player to its P1 start (/doomwarp's arrival). This
-     * indicates an intent to enter the level, so it is marked before the map is built,
+     * is the /load intent, so we are WARPING IN — mark it now, before the map even builds,
      * so the geometry renders and the level announces (a /doommarine suit-boot does neither). */
     public static void requestStartTeleport() {
         final StackTraceElement caller = Thread.currentThread().getStackTrace()[2];
@@ -647,9 +712,24 @@ public final class LatteWorld {
         warpedIn = true;
     }
 
-    /** Clears every piece of session state on a world change. Without this, a new world
-     * inherits the previous one's warp flags, mirrored positions and level origin, none of
-     * which describe it. */
+    /** LOAD GAME delivery: arm the start-teleport but hold it until a snapshot from
+     * a NEW level instance arrives (the death-restart wait) — the player must land
+     * on the LOADED level, not the still-standing pre-load one. */
+    public static void requestLoadDelivery() {
+        requestStartTeleport();
+        deliverAfterEpoch = snap != null ? snap.levelEpoch : 0;
+    }
+
+    /** The standing level's lump name ("e1m2"), or null. */
+    public static String mapName() {
+        return mapName;
+    }
+
+    /** EVERYTHING session-scoped, cleared — the world-change sweep. The /doommarine
+     * mid-air ghost was cross-world static leakage: the disconnect reset existed but was
+     * never wired to the event, so a NEW world inherited the old world's warp flags,
+     * mirror positions and level origin, and the teleport-follow lane read the fresh
+     * suit engine's first snapshot as "a DOOM teleporter moved you". */
     public static void fullSessionReset() {
         com.blackwithersteve.lattedoom.diag.DoomDiag.logNow("level", "fullSessionReset (world change)");
         drop();
@@ -674,9 +754,9 @@ public final class LatteWorld {
         com.blackwithersteve.lattedoom.play.DoomMovement.resetSession();
     }
 
-    /** A suit boot ({@code /doommarine} with no engine) runs a map only for the weapon and
-     * HUD: no warp, no delivery, no pending death. Stale level-session flags are cleared so
-     * the boot cannot teleport the player. */
+    /** A SUIT boot (/doommarine with no engine): the map runs only for the gun/HUD — no
+     * warp, no delivery, no death pending. Clears any stale level-session flags so the
+     * boot can never teleport the player anywhere ("spawned me in the sky"). */
     public static void suitBoot() {
         com.blackwithersteve.lattedoom.diag.DoomDiag.logNow("level", "suitBoot (flags cleared)");
         warpedIn = false;
@@ -686,24 +766,26 @@ public final class LatteWorld {
     }
 
     /** Is the shared/warped level session live (drives suit music: a lone overworld suit
-     * stays quiet; the level's track plays only inside a level). */
+     * stays quiet; the level's track plays when you're actually IN the level). */
     public static boolean musicShouldPlay(Minecraft mc) {
         return warpedIn || worldIsRemoteNow(mc);
     }
 
-    /** Holds the player in place while the engine tallies the intermission and loads the
-     * next map. The finished level stays standing and ownership is kept, so the player has
-     * something to stand on until the next level arrives and delivers them to its start. */
+    /** Level-complete hold: the engine is tallying the intermission (or in the finale) and
+     * about to hand us the next map. Keep the just-finished geometry standing and pin the
+     * player so they don't drift or fall through the floorless void dim while the swap runs.
+     * We DON'T drop() and DON'T relinquish ownership — the next GS_LEVEL snapshot loads the
+     * new map and {@link #levelAdvancePending} delivers the player to its start. */
     private static void holdBetweenLevels(Minecraft mc) {
         levelAdvancePending = true;
         if (mc.player != null) {
-            mc.player.setDeltaMovement(0, 0, 0); // no gravity drift between ticks
+            mc.player.setDeltaMovement(0, 0, 0); // kill gravity drift between ticks
             mc.player.fallDistance = 0;
         }
     }
 
     /**
-     * Walkover specials: any special line the mirrored movement segment properly crossed
+     * The walkover lane: any SPECIAL line the mirrored movement segment properly crossed
      * fires the engine's own P_CrossSpecialLine (doors, lifts, teleporters, exits) with
      * vanilla's side convention (side 0 = started in front).
      */
@@ -715,7 +797,7 @@ public final class LatteWorld {
         }
     }
 
-    /** Special lines this movement crossed, as {lineIdx, side}: for the local engine or
+    /** Special lines this movement crossed, as {lineIdx, side} — for the local engine or
      * for shipping upstream to the level owner's engine. */
     private static java.util.List<int[]> collectCrossings(double x0, double y0,
                                                           double x1, double y1) {
@@ -738,7 +820,7 @@ public final class LatteWorld {
             if (sideStart == pointSide(x1, y1, l)) {
                 continue; // didn't cross the line's plane
             }
-            // And the line must straddle the movement segment (proper crossing)
+            // and the line must straddle the movement segment (proper crossing)
             final double mx = x1 - x0, my = y1 - y0;
             final double c1 = mx * (l.y1() - y0) - my * (l.x1() - x0);
             final double c2 = mx * (l.y2() - y0) - my * (l.x2() - x0);
@@ -759,30 +841,34 @@ public final class LatteWorld {
         return cross <= 0 ? 0 : 1;
     }
 
-    /** Recomputed each tick: the engine senses the player whenever a level is live. */
+    /** AUTO-computed each tick: the engine senses you whenever you're inside a live level. */
     private static boolean playMode;
 
     public static boolean playMode() {
         return playMode;
     }
 
-    /** Whether the local player is transformed. Off by default: walking into a level does
-     * not transform anyone, since presence and transformation are separate. */
+    /**
+     * The MARINE TRANSFORMATION (future command): model swap, 41u eye height, etc. OFF by
+     * default — a plain Minecraft player in the level keeps Steve's own eyes and body;
+     * only the explicit transformation changes them — presence and transformation are
+     * separate things (auto-engaging the transformed eye height reads as shrinking).
+     */
     private static boolean marineForm;
 
     public static boolean marineForm() {
         return marineForm;
     }
 
-    /** Whether this client can draw a marine body. Without a WAD the renderers fall back to
-     * the vanilla avatar instead of cancelling it and drawing nothing. */
+    /** Can this client draw a marine body at all? (No WAD → renderers must fall back to
+     * Steve rather than cancel vanilla and show NOTHING.) */
     public static boolean spritesReady() {
         return sprites != null;
     }
 
     public static void setMarineForm(boolean on) {
         marineForm = on;
-        // Announce to the server: the roster drives what other players see (PLAY marine
+        // announce to the server: the roster drives what OTHER players see (PLAY marine
         // body) and the server-side rules (no MC item pickup for marines)
         com.blackwithersteve.lattedoom.net.LatteNet.sendMarineForm(on);
     }
@@ -813,10 +899,12 @@ public final class LatteWorld {
         return originY + h / UNITS;
     }
 
-    /** Finds a block placement cell against the level's geometry. Minecraft needs a real
-     * block face to place against and a level offers none, so the view ray is marched until
-     * it leaves open space and the last open sample's grid cell is returned. Null when
-     * nothing is in reach. */
+    /** B2 (blocks inside levels): ray-march the DRAWN level for a placement cell.
+     * Vanilla placement needs a real block face to click; the level is rendered geometry
+     * in a void dimension, so the FIRST block has nothing to click against. March the
+     * view ray sample by sample until it leaves open space (crosses a floor, ceiling or
+     * wall) and return the LAST OPEN sample's grid cell — open air adjacent to the
+     * surface, exactly where a clicked face would have put it. Null = nothing in reach. */
     public static net.minecraft.core.BlockPos raycastPlaceCell(Minecraft mc) {
         if (map == null || mc.player == null) {
             return null;
@@ -846,9 +934,12 @@ public final class LatteWorld {
 
     private static boolean marineAssetsFailed;
 
-    /** Loads the sprites needed to draw a transformed player, for a client that never
-     * booted an engine of its own. Done lazily on the client tick, from that client's own
-     * WAD. */
+    /**
+     * A client that never booted its own engine (a friend watching YOU play) still needs
+     * the WAD's PLAY sprites to draw a transformed player. Loads lazily on the client
+     * tick (the safe GL slot) the moment anyone appears on the marine roster. Their OWN
+     * local WAD, as always — the mod ships nothing.
+     */
     private static void ensureRemoteMarineAssets(Minecraft mc, Path iwadPath) {
         if (sprites != null || marineAssetsFailed || mc.level == null || iwadPath == null
             || com.blackwithersteve.lattedoom.play.MarineRoster.CLIENT.isEmpty()) {
@@ -863,15 +954,15 @@ public final class LatteWorld {
             DoomRuntimeTextures.ensureLoaded(wadId());
             LOGGER.info("LatteWorld: marine sprites loaded for spectating ({} frames)", sprites.size());
         } catch (Exception e) {
-            marineAssetsFailed = true; // one attempt only
+            marineAssetsFailed = true; // don't retry-spam; a broken WAD stays broken
             LOGGER.error("LatteWorld: marine spectate sprites failed to load", e);
         }
     }
 
-    // Freeze watchdog. A stalled engine presents as a frozen world with paused=false and
-    // menu=false: the tic count stops advancing while the engine thread is still alive. If
-    // that lasts 3 s without a deliberate freeze, the engine thread's stack is written to
-    // the log, which identifies the wait it is blocked in.
+    // ---- freeze watchdog: a starved tic loop reads as "the world froze" with
+    // paused=false menu=false — tics starve while the engine thread lives. When the tic
+    // stops advancing for 3s (and WE didn't freeze it), dump the engine thread's exact
+    // stack to the log: whatever wait it is sitting in IS the answer.
     private static int wdTic = Integer.MIN_VALUE;
     private static long wdSinceMs;
     private static boolean wdReported;
@@ -884,24 +975,30 @@ public final class LatteWorld {
             wdReported = false;
             return;
         }
-        if (!wdReported && now - wdSinceMs > 3000 && !host.isFrozen()
+        if (host.isFrozen()) {
+            // a deliberate pause is not a stall — and the clock must restart at the
+            // unfreeze, or leaving the menus fired the alarm before the first new tic
+            wdSinceMs = now;
+            return;
+        }
+        if (!wdReported && now - wdSinceMs > 3000
             && host.state() == DoomHost.State.RUNNING) {
             wdReported = true;
-            LOGGER.error("ENGINE STALL: tic stuck for {} ms, {}\n{}",
+            LOGGER.error("ENGINE STALL: tic stuck for {} ms — {}\n{}",
                 now - wdSinceMs, host.debugState(), host.engineStackDump());
             if (mc.player != null) {
                 mc.player.sendSystemMessage(net.minecraft.network.chat.Component.literal(
-                    "§cLatte Doom§r: the engine's tics stalled (world frozen). Stack dumped"
-                    + " to logs/latest.log: that file is the freeze answer, send it over."));
+                    "§cLatte Doom§r — the engine's tics stalled (world frozen). Stack dumped"
+                    + " to logs/latest.log — that file is the freeze answer, send it over."));
             }
         }
     }
 
-    // ---- Levels are raised in their own empty dimension, so the surrounding world's
-    // chunks and entities neither render nor tick behind them. Collision is unaffected:
-    // Inside a level it runs against the map rather than against blocks, so an empty
-    // dimension is all that is required. The player's previous position is remembered so
-    // they can be returned to it. ----
+    // ---- THE LEVEL DIMENSION (perf): loaded levels live in their OWN void world, so the
+    // overworld's chunks/entities never render or tick behind them. Collision doesn't care which
+    // dimension we're in — inside a level it runs against the DOOM map, not MC blocks
+    // (DoomMovement), so the void has nothing to stand on and needs nothing to. We remember
+    // where the player stood before entering, to put them back when the level ends.
     private static final net.minecraft.resources.Identifier DOOM_DIM_ID =
         net.minecraft.resources.Identifier.fromNamespaceAndPath("lattedoom", "doom_level");
     private static double returnX, returnY, returnZ;
@@ -915,13 +1012,15 @@ public final class LatteWorld {
     }
 
     /**
-     * Send the player into the level dimension at (x,y,z). If already there it is just a
+     * Send the player INTO the level dimension at (x,y,z). If already there it is just a
      * reposition; entering fresh from the overworld remembers where to return them to. The
      * server does the actual cross-dimension teleport (LatteNet.EnterLevelDimC2S).
      */
-    // Whether a level is being played, with its geometry and collision, as opposed
-    // to only being transformed. Loading a level sets this; transforming does not, since
-    // that must never raise geometry in the surrounding world or reposition the player.
+    // WARPED-IN: are we actually playing a level (rendered geometry + DOOM collision), as
+    // opposed to just wearing the marine SUIT in the overworld? /load sets this via
+    // enterLevelDim; /doommarine does NOT — it boots a suit engine (for the gun/HUD/ammo)
+    // but must never raise a level in your survival world or drop you onto a DOOM floor
+    // mid-air. The suit boot only transforms; it never relocates the player.
     private static boolean warpedIn;
 
     /** True while the player is warped into a level (render + DOOM physics), not just suited. */
@@ -933,7 +1032,7 @@ public final class LatteWorld {
         if (mc.player == null) {
             return;
         }
-        // Diagnostic for unexplained position changes: record the caller
+        // WHO-MOVED-ME diagnostic: name the caller
         final StackTraceElement caller = Thread.currentThread().getStackTrace()[2];
         com.blackwithersteve.lattedoom.diag.DoomDiag.logNow("level", String.format(
             "enterLevelDim (%.1f, %.1f, %.1f)", x, y, z));
@@ -944,7 +1043,7 @@ public final class LatteWorld {
             caller.getMethodName(), caller.getLineNumber());
         warpedIn = true;
         if (inLevelDim(mc)) {
-            teleportPlayer(mc, x, y, z); // already there: same-dimension reposition
+            teleportPlayer(mc, x, y, z); // already in the void — same-dimension reposition
             return;
         }
         returnX = mc.player.getX();
@@ -955,15 +1054,17 @@ public final class LatteWorld {
         com.blackwithersteve.lattedoom.net.LatteNet.sendEnterLevelDim(x, y, z);
     }
 
-    /** Returns the player to the overworld when a level ends. Does nothing if they are not
-     * in the level dimension. The guard stops the two teardown paths, the engine's quit
-     * callback and the broadcast it triggers, from firing twice. */
+    /**
+     * Take the player back to the overworld (the level ended). No-op if we're not in the
+     * dimension. The boolean guard means the owner's two teardown paths — the engine's
+     * quit callback and the shared-level-down broadcast it triggers — can't double-fire.
+     */
     public static void leaveLevelDim(Minecraft mc) {
         com.blackwithersteve.lattedoom.diag.DoomDiag.logNow("level", "leaveLevelDim");
         com.blackwithersteve.lattedoom.diag.DoomDiag.expectJump("leaveLevelDim");
-        warpedIn = false; // suit only from here on: stop rendering the level
+        warpedIn = false; // back to just the suit (or nothing): stop rendering the level
         if (!inLevelDim(mc)) {
-            leaveRequested = false; // not in the level dimension: clear the latch
+            leaveRequested = false; // already back out (or never in): reset for next time
             return;
         }
         if (leaveRequested) {
@@ -976,10 +1077,14 @@ public final class LatteWorld {
         com.blackwithersteve.lattedoom.net.LatteNet.sendLeaveLevelDim(rx, ry, rz);
     }
 
-    /** Moves the player far enough that the server would otherwise reject it. A client-side
-     * position change beyond about ten blocks is vetoed and snapped back, so the position is
-     * set locally for the current frame and the server is then asked to perform the teleport
-     * authoritatively. */
+    /**
+     * Move the player a LONG distance so it sticks. A bare client setPos across more than
+     * ~10 blocks gets vetoed by the (integrated) server — "Steve moved wrongly!" — which
+     * snapped the player straight back. setPos runs first for a same-frame view; a mod
+     * network packet then asks the server to teleport authoritatively (no op/cheats
+     * needed, no "moved wrongly", and NO /tp chat command — the old approach spammed
+     * "unknown command" for every non-op guest, on every teleport).
+     */
     public static void teleportPlayer(Minecraft mc, double x, double y, double z) {
         final StackTraceElement tpc = Thread.currentThread().getStackTrace()[2];
         com.blackwithersteve.lattedoom.diag.DoomDiag.rec("tp", String.format(
@@ -994,7 +1099,7 @@ public final class LatteWorld {
     }
 
     /** Is this world position within the raised level's playable envelope? Always false
-     * when not warped in, so a marine wearing only the suit in the overworld keeps normal
+     * when NOT warped in — so a marine wearing only the suit in the overworld keeps normal
      * Minecraft/overworld footing (no invisible DOOM floor lifting them off the ground). */
     /** The inputs {@link #insideLevel} decides on, as one line for the diagnostic log. */
     public static String levelStateForLog() {
@@ -1015,6 +1120,12 @@ public final class LatteWorld {
         return sb.toString();
     }
 
+    /**
+     * Whether the loaded WAD set is organised into episodes. An {@code ExMy} set is; a
+     * commercial {@code MAPxx} set is not, and offering it an episode page picks the wrong
+     * map. This reads the WAD's own map markers rather than which menu graphics happen to be
+     * registered, because those survive a change of WAD set.
+     */
     /**
      * Whether a raised shield covers this hit. Minecraft decides that from the direction the
      * damage came from, and engine damage carries no attacker entity for it to read, so the
@@ -1060,12 +1171,6 @@ public final class LatteWorld {
         setMarineForm(false);
     }
 
-    /**
-     * Whether the loaded WAD set is organised into episodes. An {@code ExMy} set is; a
-     * commercial {@code MAPxx} set is not, and offering it an episode page picks the wrong
-     * map. This reads the WAD's own map markers rather than which menu graphics happen to be
-     * registered, because those survive a change of WAD set.
-     */
     public static boolean hasEpisodes() {
         try {
             final WadFile w = wad;
@@ -1096,24 +1201,24 @@ public final class LatteWorld {
         return h > minFloorH - 64 && h < maxCeilH + 256;
     }
 
-    /** PIT_CheckThing for the walking player: whether any solid engine object blocks
-     * (px, py), under the blockmap rule of the object's radius plus the player's 16. */
+    /** PIT_CheckThing for the walking player: does any SOLID engine thing BLOCK you at
+     * (px,py)? Uses the blockmap rule (thing radius + your 16u radius). */
     public static boolean solidThingAt(double px, double py) {
         return thingAt(px, py, 16.0);
     }
 
-    /** Whether (px,py) lies inside a solid object's body rather than merely touching it. */
+    /** Are you DEEPLY inside a solid thing at (px,py) — your centre within its body? */
     public static boolean insideSolidThing(double px, double py) {
         return thingAt(px, py, 0.0);
     }
 
     /**
-     * The thing-block test for a move from (fromX,fromY) to (toX,toY): does
-     * the destination move the player deeper into a solid object than they already are? This
-     * blocks walking into a monster, where the overlap would increase, while always allowing
-     * sliding along it or stepping back out, where the overlap stays equal or decreases, so a
-     * player can never become trapped against one and can still walk out of an object they
-     * were teleported inside. A plain contact test cannot do both.
+     * The DOOM-faithful thing-block test for a MOVE from (fromX,fromY) to (toX,toY): does
+     * the destination push you DEEPER into any solid thing than you already were? This blocks
+     * walking INTO a monster (penetration would increase), but always lets you slide along it
+     * or step back out (penetration same or less) — so you can't get trapped touching one, and
+     * a teleport-drop inside a body can still walk free. Replaces the old "am I touching one"
+     * boolean, which either let you pass clean through or (once tightened) glued you to them.
      */
     public static boolean increasesThingOverlap(double fromX, double fromY,
                                                 double toX, double toY) {
@@ -1151,7 +1256,7 @@ public final class LatteWorld {
             }
             final double dFrom = Math.max(Math.abs(tx - fromX), Math.abs(ty - fromY));
             if (dTo < dFrom - 1.0e-4) {
-                return true; // moving deeper into it: block (but sliding/backing out is fine)
+                return true; // moving deeper into it — block (but sliding/backing out is fine)
             }
         }
         return false;
@@ -1162,9 +1267,9 @@ public final class LatteWorld {
         if (s == null || s.mSolid == null) {
             return false;
         }
-        // On a shared level this client's own mirrored body appears in the object table at
-        // the player's position, so treating it as solid would trap them. Other players'
-        // bodies still block.
+        // on a shared level OUR OWN possessed body (players[1..3] in the owner's engine)
+        // rides in the mobj table AT OUR POSITION — colliding with it froze joining
+        // players solid. Other players' bodies still block (they're really there).
         int ownBody = 0;
         boolean haveOwn = false;
         final var mc = Minecraft.getInstance();
@@ -1181,10 +1286,10 @@ public final class LatteWorld {
         }
         for (int i = 0; i < s.mobjCount; i++) {
             if (!s.mSolid[i] || (i == s.playerMobj && playMode)) {
-                continue; // the possessed marine is this player
+                continue; // the possessed marine is you — you don't block yourself
             }
             if (haveOwn && s.mId[i] == ownBody) {
-                continue; // this player's own remote body
+                continue; // your own remote body isn't a wall either
             }
             thingDrawn(s, i, thingScratch);
             final double bd = s.mRadius[i] + margin; // blockmap rule: radius sum, Chebyshev
@@ -1195,7 +1300,7 @@ public final class LatteWorld {
         return false;
     }
 
-    /** The map's own player-1 start, as a world position (for arriving in the level). */
+    /** The map's own player-1 start, as a WORLD position (for arriving in the level). */
     public static double[] playerStartWorld() {
         if (map == null) {
             return null;
@@ -1214,9 +1319,10 @@ public final class LatteWorld {
         return mapRef();
     }
 
-    // ---- Remote level: another player's engine is authoritative, and this client raises
-    // the same map from its own WAD at the origin that client announced, so the level is
-    // visible and walkable under DOOM collision. ----
+    // ---- remote level: another player's engine is the truth; we raise the SAME map from
+    // OUR OWN WAD at their announced origin. Static geometry (their engine's doors/lifts
+    // don't reach us yet — that's the engine-authority step), but you SEE the level and
+    // WALK it under DOOM collision instead of falling through the sky.
     private static String remoteName;
     private static double remoteOx, remoteOy, remoteOz;
     private static java.util.UUID remoteOwner;
@@ -1235,10 +1341,10 @@ public final class LatteWorld {
         remoteOy = oy;
         remoteOz = oz;
         remoteOwner = owner;
-        // A guest (someone else owns this level) joins the level dimension too, so co-op
-        // players share one world: MC only renders entities/marine bodies in the same
+        // a GUEST (someone else owns this level) joins the level dimension too, so co-op
+        // players share one world — MC only renders entities/marine bodies in the same
         // dimension, and cross-side combat needs everyone co-located. Deferred until the
-        // map is raised (remoteTick), which also excludes guests without a WAD.
+        // map is actually raised (remoteTick), which also excludes WAD-less guests.
         final var mc = Minecraft.getInstance();
         final boolean guest = mc.player != null && owner != null
             && !owner.equals(mc.player.getUUID());
@@ -1253,7 +1359,7 @@ public final class LatteWorld {
         remoteOwner = null;
         remoteSnap = null;
         guestEnterPending = false;
-        warpedIn = false; // the shared level is gone
+        warpedIn = false; // the shared level we were in is gone
     }
 
     /** A guest has a shared level to join but hasn't been moved into its dimension yet. */
@@ -1264,25 +1370,25 @@ public final class LatteWorld {
         remoteSnap = s;
     }
 
-    /** {@code /doomwarp} while spectating another player's level: this client takes over as
-     * the level owner (last warper wins), resumes its own engine path and re-announces. */
+    /** /doomwarp while spectating someone else's level: YOU become the world now (last
+     * warper wins — id's co-op spirit). Our engine path resumes and re-announces. */
     public static void claimWorld() {
         clearRemoteLevel();
     }
 
-    /** This client's own engine state: the marine suit (weapons/ammo/HUD). On the level
+    /** THIS client's own engine state — the marine suit (weapons/ammo/HUD). On the level
      * owner it is the same object as the world snapshot; on a spectator it is their
      * private suit engine (or null, no HUD). */
     static WorldSnapshot suitSnap() {
         return suit;
     }
 
-    /** The world snapshot in force: this client's own engine, or the owner's wire feed. */
+    /** The WORLD's snapshot (own engine or the owner's wire feed) — what demons exist. */
     public static WorldSnapshot worldSnap() {
         return snap;
     }
 
-    /** A raw lump from the local WAD (null if absent/no WAD): remote sfx playback. */
+    /** A raw lump from the local WAD (null if absent/no WAD) — remote sfx playback. */
     public static byte[] wadLump(String name) {
         final WadFile w = wad;
         return w != null ? w.lumpBytes(name) : null;
@@ -1293,8 +1399,8 @@ public final class LatteWorld {
         return remoteName;
     }
 
-    /** Packed lightmap coordinates for a player standing inside the level: the sector's
-     * light as block light and no sky contribution, or -1 when outside a level. */
+    /** Packed lightmap coords for a player standing IN the level (sector light as block
+     * light, no sky — doom rooms make their own), or -1 outside/no level. */
     public static int levelLightCoords(double wx, double wy, double wz) {
         if (map == null || !insideLevel(wx, wy, wz)) {
             return -1;
@@ -1304,20 +1410,19 @@ public final class LatteWorld {
         return block << 4;
     }
 
-    /** The local engine quit or crashed. Tears the shared level down for everyone; without
-     * this, each client's copy of the level would stay standing. */
+    /** Our own engine died (quit/crash): tear the shared level down for everyone —
+     * without this, our own echo of the share keeps a ghost level standing. */
     public static void engineQuit() {
         clearRemoteLevel();
         drop();
-        // The level is gone, so return to the position held before entering the level
-        // dimension. A no-op for a player who never left the overworld, such as a suit
-        // engine running without /load.
+        // the level is gone — come back out of the void to where we started (no-op if we
+        // never left the overworld, e.g. a suit engine that ran without /load)
         leaveLevelDim(Minecraft.getInstance());
     }
 
-    /** Spectator tick: raises the level another client announced and drives it from that
-     * client's snapshot feed, which carries sector motion, light levels and objects. A local
-     * suit engine, if one booted, supplies only the HUD. */
+    /** The spectator tick: raise the level someone else announced and run it on THEIR
+     * engine's snapshot feed — movers glide, lights flicker, monsters exist. Our own
+     * engine (if the marine suit booted one) only supplies the HUD. */
     private static void remoteTick(Minecraft mc, DoomHost ownHost, Path iwadPath) {
         suit = ownHost != null ? ownHost.worldSnapshot() : null;
         if (remoteName.equals(failedMap)) {
@@ -1327,7 +1432,7 @@ public final class LatteWorld {
             try {
                 loadCommon(mc, remoteName, iwadPath,
                     new double[]{remoteOx, remoteOy, remoteOz});
-                announcedLevel = false; // spectating: drop any earlier ownership claim
+                announcedLevel = false; // spectating now: any old claim of ours is void
                 LOGGER.info("LatteWorld: raised REMOTE {} at ({}, {}, {})", remoteName,
                     (int) remoteOx, (int) remoteOy, (int) remoteOz);
             } catch (Exception e) {
@@ -1337,41 +1442,40 @@ public final class LatteWorld {
                 return;
             }
         }
-        // The map is raised now: move the guest into the level dimension (once), so they
+        // the map is raised now — move the guest into the level dimension (once), so they
         // stand in the same void world as the owner and every other co-op player
         if (guestEnterPending && map != null && mc.player != null) {
             final double[] start = playerStartWorld();
             if (start != null) {
                 guestEnterPending = false;
                 guestDeliveredMap = remoteName;
-                // The physics keyframes still describe the previous map, or the overworld.
                 com.blackwithersteve.lattedoom.play.DoomMovement.forceReseed();
                 enterLevelDim(mc, start[0], start[1] + 0.1, start[2]);
             }
         }
         final WorldSnapshot rs = remoteSnap;
         if (rs != null) {
-            snap = rs; // the owner's feed drives the same heights/lights/objects path
+            snap = rs; // the owner's world: heights/lights/mobjs feed the same machinery
         }
-        playMode = false; // the owner's engine holds this client's presence, not a mirror
+        playMode = false; // the OWNER's engine owns our presence there, not a local mirror
         if (ownHost != null) {
-            weaponInput(mc, ownHost); // the suit still fires through the local engine
-            ownHost.drainSounds();    // suit sfx are muted while spectating
+            weaponInput(mc, ownHost); // the suit still fires/switches through OUR engine
+            ownHost.drainSounds();    // suit sfx are muted while spectating; keep it empty
         }
-        com.blackwithersteve.lattedoom.play.DoomCombat.tick(mc, suit);
-        com.blackwithersteve.lattedoom.play.MinecraftCombat.tickArrows(mc);
+        com.blackwithersteve.lattedoom.play.DoomCombat.tick(mc, suit); // spectator guns are real too
+        com.blackwithersteve.lattedoom.play.MinecraftCombat.tickArrows(mc); // arrows work for guests
         presenceTick(mc, rs);
     }
 
-    // Presence upstream: while inside a shared level this client streams its body and
-    // inputs to the owner's engine, where it occupies one of players[1..3] and is a full
-    // participant in that engine's simulation.
+    // ---- PRESENCE upstream (B4): while inside the shared level, this client streams
+    // its body + inputs to the owner's engine, where it lives as players[1..3] — hunted
+    // by monsters, firing real bullets, opening real doors.
     private static double presX = Double.NaN, presY;
-    // This client's mirrored body position from the previous tick, used to detect teleports
+    // our remote body's position last tick (owner's snapshot) — teleport detection
     private static double lastRbX = Double.NaN, lastRbY;
     private static boolean remoteUseQueued;
 
-    /** R pressed while the world is someone else's: ship use upstream this tick. */
+    /** R pressed while the world is someone else's: ship USE upstream this tick. */
     public static void queueRemoteUse() {
         remoteUseQueued = true;
     }
@@ -1392,10 +1496,10 @@ public final class LatteWorld {
         final double dx = worldToDoomX(mc.player.getX());
         final double dy = worldToDoomY(mc.player.getZ());
         final double dh = worldToDoomH(mc.player.getY());
-        // Teleporter follow: the owning engine moved this client's body. Same
-        // speed-independent test as the host path: network lag makes the remote body
-        // trail the player's own movement, so an absolute distance check triggers constantly
-        // for a fast-moving player. A real teleport moves the body while the player does not.
+        // teleporter follow: the owner's engine moved OUR body (rb mapping by mId). Same
+        // speed-independent test as the host path — network lag makes the remote body
+        // trail our own movement, so an absolute distance check false-fired constantly
+        // for a fast-moving guest. A real teleport jumps the body while we barely moved.
         if (rs != null && rs.rbMobjId != null && !Double.isNaN(presX)) {
             double bx = Double.NaN, by = 0, bz = 0;
             final java.util.UUID me = mc.player.getUUID();
@@ -1451,8 +1555,8 @@ public final class LatteWorld {
         presY = dy;
     }
 
-    /** Owner side: a guest's presence packet arrived. Hands it to the engine and charges
-     * their Minecraft health with whatever damage the engine dealt since the last packet. */
+    /** OWNER side: a spectator's presence arrived — hand it to the engine (and bill
+     * their MC hearts for whatever the engine did to them since last time). */
     public static void acceptPresence(java.util.UUID who, double x, double y, double z,
                                       double angleDeg, int buttons, int slot,
                                       int healthMc, int[][] crossings) {
@@ -1467,14 +1571,14 @@ public final class LatteWorld {
             final int dmg = rb.pendingDamage.getAndSet(0);
             final int heal = rb.pendingHeal.getAndSet(0);
             if (dmg > 0 || heal > 0) {
-                // Routed through the server so the level owner can damage any player
+                // via the server (guest-safe): the world owner bills any player's hearts
                 com.blackwithersteve.lattedoom.net.LatteNet.sendPlayerDamage(who, dmg, heal, 0, 0, false);
             }
         }
     }
 
     /** The engine's map as a WAD lump name: E1M1-style for DOOM 1 WADs, MAP01-style for
-     * DOOM 2 / commercial WADs (probe the WAD itself: the engine plays both). */
+     * DOOM 2 / commercial WADs (probe the WAD itself — the engine plays both). */
     private static String engineMapName(Path iwadPath, int episode, int map) {
         final String exmy = "e" + episode + "m" + map;
         try {
@@ -1488,7 +1592,7 @@ public final class LatteWorld {
         }
     }
 
-    /** Parse the engine's current map from the same WAD file the engine booted, bake the mesh. */
+    /** Parse the engine's current map from the SAME WAD file the engine booted, bake the mesh. */
     private static void load(Minecraft mc, String name, Path iwadPath) throws Exception {
         loadCommon(mc, name, iwadPath, null);
     }
@@ -1502,14 +1606,15 @@ public final class LatteWorld {
             sprites = SpriteSet.load(wad);
             LOGGER.info("LatteWorld: sprite table has {} frames", sprites.size());
         }
-        // Composite and register the WAD's textures. This runs on the client tick, which is
-        // the safe upload slot between frames; uploading during the deferred render phase is
-        // not.
+        // Composite + register the WAD's textures. We ARE on the client tick here — the safe
+        // GL-upload slot between frames (never in the deferred render phase).
         DoomRuntimeTextures.init();
         DoomRuntimeTextures.ensureLoaded(wadId());
 
         map = DoomMap.loadFromWad(wad, name);
-        tri = SectorTriangulator.triangulate(map);
+        tri = LatteMesh.bspMode() && map.hasBsp()
+            ? BspTriangulator.triangulate(map)
+            : SectorTriangulator.triangulate(map);
         for (String issue : tri.issues()) {
             LOGGER.info("LatteWorld [{}]: {}", name, issue);
         }
@@ -1523,14 +1628,17 @@ public final class LatteWorld {
         }
         minFloorH = minFloor;
         maxCeilH = maxCeil;
-        // The level is anchored to a fixed 512-block grid cell rather than to the player's
-        // exact position, so two clients near each other raise it in the same place. The
-        // height is a constant rather than derived from the player's own: deriving it buries
-        // the level when the player stands on low terrain, and a constant guarantees every
-        // client agrees. The small offset keeps the level's planes off the block grid. A
-        // level owned by another client uses their announced origin verbatim instead.
-        originEpoch++; // state stored in origin-relative units is invalid past this point;
-                       // holders must re-seed against the new origin
+        // The level is anchored to a DETERMINISTIC 512-block grid cell (not the player's
+        // exact feet): two clients standing near each other raise the level in the SAME
+        // world spot, so a second player sees the same halls in the same place. Height is
+        // FIXED sky (Y 128): deriving it from the player's Y rounded DOWN, so warping while
+        // standing on ~Y63 terrain buried the whole level underground ("the level
+        // disappears"). A constant is also the strongest two-client contract: same height
+        // everywhere, every time. The 0.0071 nudge keeps DOOM's planes off MC's block grid.
+        // A REMOTE level (someone else's engine) skips all of this: their announced origin
+        // IS the origin, verbatim — identical world placement on every client.
+        originEpoch++; // THE LAUNCH BUG: any state stored in origin-relative DOOM units
+                       // is garbage the moment these change — holders must re-seed
         if (forcedOrigin != null) {
             originX = forcedOrigin[0];
             originY = forcedOrigin[1];
@@ -1556,8 +1664,8 @@ public final class LatteWorld {
         }
         groups = g;
         sectorBounds = bounds;
-        LatteSectorBuffers.dispose(); // a new map: the persistent buffers rebuild lazily next frame
-        // (the /doomwarp start-delivery is consumed in clientTick: it must fire even when
+        LatteSectorBuffers.dispose(); // new map -> the S2 buffers rebuild lazily next frame
+        // (the /doomwarp start-delivery is consumed in clientTick — it must fire even when
         // the map was already raised, e.g. warping to the same level again)
         // sector adjacency for moving-neighbor rebakes (a wall in N faces M's opening)
         final Map<Integer, Set<Integer>> adj = new HashMap<>();
@@ -1572,7 +1680,7 @@ public final class LatteWorld {
             final Set<Integer> ns = adj.get(i);
             neighbors[i] = ns == null ? new int[0] : ns.stream().mapToInt(Integer::intValue).toArray();
         }
-        // Per-sector linedef index (same one-time cost as neighbors, mirrors that lifetime)
+        // per-sector linedef index (same one-time cost as neighbors, mirrors that lifetime)
         final List<List<Integer>> byline = new ArrayList<>(map.sectors.size());
         for (int i = 0; i < map.sectors.size(); i++) {
             byline.add(new ArrayList<>());
@@ -1599,10 +1707,9 @@ public final class LatteWorld {
         mapName = name;
         failedMap = null;
         if (forcedOrigin == null && warpedIn) {
-            // This client's engine owns a level the player has entered: announce it so that
-            // other players raise the same level.
-            // A suit boot (warpedIn false) runs a map only for the weapon and HUD, so it must
-            // not announce: every other client would raise that map.
+            // OUR engine owns a level we WARPED INTO: share it so other players raise it too.
+            // A /doommarine suit-boot (warpedIn false) runs a map only for the gun/HUD and
+            // must NOT announce it — otherwise everyone else's world raises E1M1 out of nowhere.
             com.blackwithersteve.lattedoom.net.LatteNet.sendLevelUp(name, originX, originY, originZ);
             announcedLevel = true;
             com.blackwithersteve.lattedoom.diag.DoomDiag.logNow("level", "raised " + name
@@ -1614,14 +1721,15 @@ public final class LatteWorld {
     }
 
     /**
-     * Mirror the engine's live sector heights into the mesh: any sector the engine moved,
-     * such as a door or a lift, is re-baked, plus every neighbour across a shared
+     * Mirror the engine's live sector heights into the mesh: any sector whose floor/ceiling moved
+     * (a door, a lift — moved BY the engine) is re-baked, plus every neighbour across a shared
      * line (their upper/lower wall strips stretch with the opening).
      */
-    // Floor texture changes, from the specials that raise a floor and change its texture.
-    // The engine reports each sector's floor texture as an index, and those indices are
-    // paired with the map's flat names once at load, so a sector can be re-textured when its
-    // index moves to another known flat. Local only: the network snapshot omits them.
+    // FLOOR-TEXTURE swaps (SIGIL's lava floors rise and turn to rock; countless
+    // vanilla maps do this — "raise floor and change texture" specials). The engine reports
+    // each sector's live floorpic as an INDEX; we pair those indices with our own authored
+    // flat NAMES once at load (every flat the map uses), so when a sector's floorpic moves to
+    // another known flat we can re-skin it. Owner/solo only — the wire snapshot omits floorpic.
     private static short[] lastFloorPic;
     private static Map<Integer, String> floorPicNames;
 
@@ -1638,25 +1746,26 @@ public final class LatteWorld {
         }
         Set<Integer> changed = null;
         for (int i = 0; i < n; i++) {
-            // A single timeline for everything that must agree. Collision heights follow
-            // the rendered endpoint, one tic behind the engine, which is the same delayed
-            // pair the sector mesh and the rider update interpolate between. Using the
-            // newest engine heights here instead puts the physics a full tic ahead of the
-            // drawn floor: at every start, stop and reversal of a moving sector the rider
-            // and the collision floor disagree, the grounded state flickers, the floor
-            // association is dropped and the ride stutters. Delaying all three keeps the
-            // drawn floor, the collision floor and the rider consistent at every instant,
-            // at the cost of one tic of latency, which is not perceptible.
+            // ONE TIMELINE (mismatched timelines make lifts jitter — the rider hops
+            // mid-air): collision/physics heights follow the RENDERED endpoint (prev),
+            // one tic behind the engine — the SAME delayed pair the platform mesh and
+            // the rider pin interpolate on. Feeding the FRESH engine heights here put
+            // physics a full tic AHEAD of the drawn platform: at every mover start,
+            // stop and reversal the pin and the physics floor disagreed, grounding
+            // flickered, the glue dropped, and gravity stuttered the ride. Delayed
+            // everywhere = the platform, the collision floor and the rider agree at
+            // every instant; a tic of mover latency is invisible.
             final double df = prevFloor != null && i < prevFloor.length ? prevFloor[i] : s.floorH[i];
             final double dc = prevCeil != null && i < prevCeil.length ? prevCeil[i] : s.ceilH[i];
             final int f = (int) Math.floor(df);
             final int c = (int) Math.floor(dc);
             boolean sectorChanged = false;
             if (f != map.floorNow(i) || c != map.ceilNow(i)) {
-                // The equivalent of P_ChangeSector: plane movement carries everything standing
-                // on the plane in the same operation. A player glued to this sector is moved by
-                // the floor's exact delta, at any speed and in both directions, so a fast lift
-                // cannot outrun gravity. Spectators ride the wire heights the same way.
+                // P_ChangeSector, our way: T_MovePlane moves every thing standing ON the
+                // plane in the same operation. If the LOCAL player is glued to this
+                // sector, carry them by exactly the floor's delta — any speed, both
+                // directions. This is what keeps you ON a fast lift instead of it
+                // outrunning gravity (and it rides the wire heights for spectators too).
                 if (i == com.blackwithersteve.lattedoom.play.DoomMovement.gluedSector()) {
                     com.blackwithersteve.lattedoom.diag.DoomDiag.rec("carry", String.format(
                         "sector=%d floor %d -> %d (delta %d)", i, map.floorNow(i), f,
@@ -1670,7 +1779,7 @@ public final class LatteWorld {
                 lastFloorPic[i] = s.floorPic[i];
                 final String name = floorPicNames.get((int) s.floorPic[i]);
                 if (name != null && !name.equals(map.floorFlatNow(i))) {
-                    map.setFloorFlat(i, name);
+                    map.setFloorFlat(i, name); // re-skin: lava floor rose into rock, etc.
                     sectorChanged = true;
                 }
             }
@@ -1684,8 +1793,8 @@ public final class LatteWorld {
         if (changed == null) {
             changed = Set.of();
         }
-        // Pressed switches: adopt the engine's flipped lines and re-bake only the sectors on
-        // both sides of those walls. Reverts on reusable buttons fall out of the same diff.
+        // PRESSED SWITCHES: adopt the engine's flipped lines; re-bake just those walls'
+        // sectors (both sides). Reverts (reusable buttons) fall out of the same diff.
         if (s.switchedLines != null) {
             final Set<Integer> now = new HashSet<>();
             for (int li : s.switchedLines) {
@@ -1693,7 +1802,7 @@ public final class LatteWorld {
             }
             if (!now.equals(map.switchedLines)) {
                 final Set<Integer> delta = new HashSet<>(now);
-                delta.addAll(map.switchedLines); // presses and reverts both rebake
+                delta.addAll(map.switchedLines); // symmetric: presses AND reverts rebake
                 map.switchedLines.clear();
                 map.switchedLines.addAll(now);
                 for (int li : delta) {
@@ -1709,12 +1818,11 @@ public final class LatteWorld {
                 }
             }
         }
-        // Deferred rebuild. While a sector is moving its static geometry is not drawn at
-        // all, since the interpolated version is used instead, so rebuilding it and its
-        // neighbours on every tic only costs render-thread time and produces a periodic
-        // frame hitch for each moving sector. Mark them here and rebuild once the sector
-        // stops. The neighbour lookup uses the precomputed table rather than scanning
-        // every linedef.
+        // DEFERRED REBAKE (per-tic rebakes hitch moving platforms): while a sector
+        // glides, its STATIC group isn't even drawn (bakeInterp is) — yet it and its
+        // neighbors were fully re-baked EVERY TIC on the render thread, a 35Hz frame
+        // hitch per mover. Mark dirty now; re-bake only once the sector STOPS moving.
+        // Neighbor fan-out uses the precomputed table, not a full linedef scan.
         for (int i : changed) {
             dirtyRebake.add(i);
             if (neighbors != null && i < neighbors.length) {
@@ -1749,17 +1857,17 @@ public final class LatteWorld {
                 }
             }
             if (LatteSectorBuffers.ENABLED) {
-                LatteSectorBuffers.rebuild(i, one); // keep this sector's persistent GPU buffer current
+                LatteSectorBuffers.rebuild(i, one); // S2: keep this sector's GPU buffer current
             }
         }
     }
 
     /**
-     * Draw the level's persistent GPU buffers. Called from the {@code LevelRenderer.render}
-     * tail mixin, which supplies the camera from the render state: the view rotation matrix
-     * and camera position, independent of the deferred pipeline's global modelview. Reading
-     * {@code pose.last().pose()} in the submit hook instead yields no rotation, leaving the
-     * geometry fixed as the camera turns. No-op unless the persistent path is enabled.
+     * Draw the level's persistent GPU buffers (S2). Called from the LevelRenderer.render TAIL
+     * mixin, which hands us the camera straight from the render's own CameraRenderState — the
+     * VIEW ROTATION matrix + camera position, deterministic and independent of the deferred
+     * pipeline's global modelview (capturing pose.last().pose() in the submit hook gave NO
+     * rotation, so the geometry didn't turn with the mouse). No-op unless /persist is on.
      */
     public static void drawPersistent(org.joml.Matrix4f viewRotation, double cx, double cy,
                                       double cz,
@@ -1767,7 +1875,7 @@ public final class LatteWorld {
         if (!LatteSectorBuffers.ENABLED || !warpedIn || groups == null || viewRotation == null) {
             return;
         }
-        // Camera-relative: rotate by the view, then translate the level
+        // camera-relative like the classic path: rotate by the view, then translate the level
         // origin by (origin - cam). Vertices are baked in mesh-local coords.
         final org.joml.Matrix4f mv = new org.joml.Matrix4f(viewRotation).translate(
             (float) (originX - cx), (float) (originY - cy), (float) (originZ - cz));
@@ -1776,11 +1884,11 @@ public final class LatteWorld {
             movingSectors(), originX, originY, originZ);
     }
 
-    /** Release the mesh once the engine leaves the level. Textures stay registered per WAD. */
+    /** Release the mesh (engine left the level). Textures stay registered — they're per-WAD. */
     private static void drop() {
-        LatteSectorBuffers.dispose();
+        LatteSectorBuffers.dispose(); // free the S2 GPU buffers for this map
         if (announcedLevel) {
-            // The shared level is withdrawn for everyone, on a reload, quit or world change.
+            // our shared level goes away for everyone (warp reboot, quit, world leave)
             com.blackwithersteve.lattedoom.net.LatteNet.sendLevelDown();
             announcedLevel = false;
         }
@@ -1799,10 +1907,10 @@ public final class LatteWorld {
         lastTic = -1;
         lastFloorPic = null; // rebuild the floorpic->name table for the next map
         floorPicNames = null;
-        // warpedIn is deliberately not cleared here: drop() also runs during a /load reboot,
-        // where the engine is briefly without a snapshot, and clearing it would blank the
-        // incoming level. leaveLevelDim and clearRemoteLevel own the transition out of a
-        // level; the null map and group state make a stale warpedIn harmless until then.
+        // NB: don't clear warpedIn here — drop() also fires mid-/load-reboot (engine briefly
+        // has no snapshot), and clearing it would blank the incoming level. leaveLevelDim/
+        // clearRemoteLevel own the "we actually left" transition; the map==null/groups==null
+        // guards make a stale warpedIn harmless in the meantime.
         lastMirrorX = Double.NaN; // stale mirror must not fake a teleport on the next level
         lastEngineX = Double.NaN;
     }
@@ -1813,9 +1921,9 @@ public final class LatteWorld {
         return groups;
     }
 
-    /** Live sector light (0-255) for vertex shading. The engine animates these; on a remote
-     * shared level with no local engine, the WAD's authored light levels are used instead of
-     * full brightness. */
+    /** Engine-live sector light (0-255) for the shade of a vertex; the ENGINE animates
+     * these. Without an engine (a REMOTE shared level) the WAD's authored light levels
+     * shade the world — not fullbright. */
     static int lightOf(int sector) {
         final WorldSnapshot s = snap;
         if (s != null && sector >= 0 && sector < s.light.length) {
@@ -1842,7 +1950,7 @@ public final class LatteWorld {
 
     /**
      * Per rendered FRAME (render thread): advance the mover keyframes at the engine's own
-     * 35 Hz: when a new snapshot tic appears, the previous targets become the previous
+     * 35Hz — when a new snapshot tic appears, yesterday's targets become the previous
      * keyframe, the discrete cache re-bakes (collision-truth heights), and the wall clock
      * marks the tic's arrival so {@link #alpha()} can interpolate the glide between them.
      */
@@ -1874,8 +1982,8 @@ public final class LatteWorld {
     }
 
     /** The drawn position of snapshot object {@code i}, written into {@code out} as
-     * {x, y, z} in map units. An object with no previous keyframe, and a step large enough
-     * to be a teleport, reports its current position unchanged. */
+     * {x, y, z} in map units. Objects with no previous keyframe, and steps large enough to
+     * be a teleport, report their current position unchanged. */
     public static void thingDrawn(com.blackwithersteve.lattedoom.engine.WorldSnapshot s,
                                   int i, double[] out) {
         out[0] = s.mx[i];
@@ -1917,13 +2025,14 @@ public final class LatteWorld {
         }
         if (s.tic == lastTic) {
             traceMover();
-            riderFollow(); // the platform is interpolated per frame, so is its rider
+            riderFollow(); // the platform glides every FRAME; so does its rider
             return;
         }
-        // Roll the pair and tag each keyframe with the engine tic it belongs to, since the
-        // interpolation below is time-driven rather than arrival-driven. The rendered pair is
-        // the two newest keyframes. Using the older pair leaves the renderer a full publish
-        // behind with cur unused, which pins alpha at its cap and lurches at every roll.
+        // roll the pair and TAG each keyframe with the engine tic it belongs to — the
+        // interpolation below is time-driven, not arrival-driven. The RENDERED pair is
+        // prev -> cur (the NEWEST data): the tape showed the old prev2 -> prev pair
+        // starving the renderer a full publish behind while cur sat unused (alpha pinned
+        // at the cap, lurching at every roll — "consistent but choppy").
         ticOfPrev2 = ticOfPrev;
         ticOfPrev = ticOfCur > 0 ? ticOfCur : lastTic;
         ticOfCur = s.tic;
@@ -1936,17 +2045,15 @@ public final class LatteWorld {
             curFloor[i] = s.floorH[i];
             curCeil[i] = s.ceilH[i];
         }
-        // A synthesised engine clock. Interpolating against the arrival times of
-        // keyframes cannot be smooth, because the engine thread's tic production jitters
-        // under thread scheduling and the render thread only observes arrivals at frame
-        // boundaries; correcting per keyframe merely redistributes that jitter.
-        //
-        // Instead a continuous clock is maintained, anchored at a tic and a timestamp,
-        // drift-corrected by 2 percent per keyframe and resynchronised outright when it
-        // is more than three tics out, which also recovers after a pause. Geometry is then
-        // rendered at a fixed latency behind the newest keyframe, so jitter within that
-        // budget is absorbed entirely. The cost is roughly two tics, about 57 ms, of
-        // latency on moving sectors, which is not perceptible.
+        // THE SYNTHESIZED ENGINE CLOCK. Arrival-keyed timelines can never be
+        // smooth: the engine thread's tic
+        // production jitters under JVM scheduling AND the render thread notices arrivals
+        // at frame quantization — every earlier ladder/nudge scheme just moved that
+        // jitter around. Instead: one continuous engine-time clock (baseTic anchored at
+        // baseNanos, drift-corrected 2% per roll, hard resync past 3 tics — unfreeze),
+        // and the mesh renders at a FIXED LATENCY behind the newest keyframe. Jitter up
+        // to that budget is absorbed entirely; the cost is ~2 tics (57ms) of mover
+        // latency, invisible on doors and lifts.
         final long now = System.nanoTime();
         if (baseNanos == 0) {
             baseNanos = now;
@@ -1974,14 +2081,14 @@ public final class LatteWorld {
         return baseTic + (System.nanoTime() - baseNanos) / TIC_NANOS;
     }
 
-    /** The smooth render clock in engine tics: for per-frame effects that follow DOOM
+    /** The smooth render clock in engine tics — for per-frame effects that follow DOOM
      * time (the marine camera's P_CalcHeight bob). */
     public static double renderTics() {
         return engineTimeTics();
     }
 
-    /** One log line per frame while anything moves: the drawn height of the first moving
-     * sector and the clock state, which records the motion curve for later inspection. */
+    /** Flight-recorder lane: one line per frame while anything moves — the exact drawn
+     * height of the first moving sector, with the clock state. The motion curve on tape. */
     private static void traceMover() {
         if (curFloor == null) {
             return;
@@ -1992,15 +2099,14 @@ public final class LatteWorld {
                     "s=%d drawn=%.2f a=%.3f pair=[%.1f->%.1f] tics=[%d->%d] et=%.2f",
                     i, prevFloor[i] + (curFloor[i] - prevFloor[i]) * alpha(), alpha(),
                     prevFloor[i], curFloor[i], ticOfPrev, ticOfCur, engineTimeTics()));
-                return; // one sector per frame is enough
+                return; // one sector per frame is enough signal
             }
         }
     }
 
-    /** The rider glides with the rendered platform: while glued to a sector whose
-     * rendered pair is moving, the player's Y follows the same interpolation the mesh
-     * uses, applied per frame rather than per keyframe; per-keyframe updates make the ride
-     * visibly step. */
+    /** The rider glides WITH the rendered platform: while glued to a sector whose
+     * RENDERED pair is moving, the player's Y follows the same interpolation the mesh
+     * uses — per frame, not per keyframe (the keyframe jumps were the "jumpy" ride). */
     private static void riderFollow() {
         final double wy = riddenSurfaceWorldY();
         if (Double.isNaN(wy)) {
@@ -2021,10 +2127,10 @@ public final class LatteWorld {
             com.blackwithersteve.lattedoom.play.DoomMovement.releaseGlue();
             return;
         }
-        // Lock the rider to the platform mesh's own timeline. setPos alone is not enough: MC
-        // renders the eye as getPosition(partialTick) = lerp(partialTick, yo, getY()): the
-        // 20Hz render clock against a stale tic-start yo, a different clock than the 35Hz
-        // alpha() the floor mesh is baked at, so the surface slid under the player every
+        // Lock the rider to the platform mesh's OWN timeline. setPos alone is not enough: MC
+        // renders the eye as getPosition(partialTick) = lerp(partialTick, yo, getY()) — the
+        // 20Hz render clock against a stale tic-start yo, a DIFFERENT clock than the 35Hz
+        // alpha() the floor mesh is baked at — so the surface slid under the player every
         // frame. Pinning yo collapses that lerp so the eye sits exactly on the rendered floor.
         com.blackwithersteve.lattedoom.diag.DoomDiag.framePlayerY(mc.player.getY(), "pre-pin");
         com.blackwithersteve.lattedoom.diag.DoomDiag.rec("pin", String.format(
@@ -2037,11 +2143,11 @@ public final class LatteWorld {
     }
 
     /**
-     * World Y of the glued sector's rendered floor surface this frame: the exact
-     * {@code prev2 -> prev @ alpha()} the platform mesh ({@link #bakeInterp}) is baked at: or
+     * World Y of the glued sector's RENDERED floor surface this frame — the exact
+     * {@code prev2 -> prev @ alpha()} the platform mesh ({@link #bakeInterp}) is baked at — or
      * NaN when the local player isn't standing on a sector that is currently gliding. Both
      * {@link #riderFollow} (per frame) and the DoomMovement physics tick (once per client tick)
-     * read this so they write the same vertical; otherwise the per-tick physics height
+     * read this so they write the SAME vertical; otherwise the per-tick physics height
      * (fresh-floor timeline) and the per-frame mesh height (alpha timeline) fight and the ride
      * pops once per tic.
      */
@@ -2055,19 +2161,19 @@ public final class LatteWorld {
     }
 
     private static final double TIC_NANOS = 1.0e9 / 35.0;
-    // The synthesized engine clock + tic-tagged keyframe pair
+    // the synthesized engine clock + tic-tagged keyframe pair
     private static long baseNanos;
     private static int baseTic;
     private static int ticOfPrev2, ticOfPrev, ticOfCur;
 
-    /** Render latency behind the newest keyframe, in tics; this is the jitter budget. The
-     * per-tic publish ({@code Engine.TIC_TAP}) delivers a steady 35 Hz feed, so 1.5 tics,
-     * about 43 ms, is sufficient. */
+    /** Render latency behind the newest keyframe, in tics: the jitter budget. With the
+     * per-TIC publish (Engine.TIC_TAP) the feed is steady 35Hz, so 1.5 is plenty —
+     * ~43ms of mover/monster latency, invisible. */
     private static final double RENDER_LATENCY_TICS = 1.5;
 
-    /** Progress through the newest tagged pair (prev -> cur) at the synthesised engine time
-     * minus the fixed latency. Being time-driven, arrival jitter within the budget has no
-     * effect. The 1.15 soft cap allows brief extrapolation rather than a stall. */
+    /** Progress through the NEWEST tagged pair (prev -> cur) at the synthesized engine
+     * time minus the fixed latency. Time-driven: any arrival jitter within the budget is
+     * mathematically invisible. Soft cap 1.15 = brief extrapolation, never a stall. */
     static double alpha() {
         if (ticOfCur <= ticOfPrev) {
             return 1.0;
@@ -2077,25 +2183,25 @@ public final class LatteWorld {
             (t - ticOfPrev) / (double) (ticOfCur - ticOfPrev)));
     }
 
-    /** Continuous engine time in tics (integer tic plus intra-tic phase), for anything that
-     * must interpolate at the display frame rate, such as weapon bob. Effects that step per
-     * tic, such as the 8-tic flat animations, keep using snap.tic. */
+    /** Continuous engine time in tics (integer tic + intra-tic phase) — the clock for
+     * anything that must glide at ANY frame rate (weapon bob sway). Tic-STEPPED effects
+     * (8-tic flat animations) keep using snap.tic: stepping is the authentic look. */
     static double ticTime() {
         return engineTimeTics();
     }
 
-    /** Sectors gliding this frame (rendered pair differs) plus wall-sharing neighbors. */
+    /** Sectors gliding this frame (RENDERED pair differs) plus wall-sharing neighbors. */
     static Set<Integer> movingSectors() {
         if (curFloor == null) {
             return Set.of();
         }
         Set<Integer> moving = null;
         for (int i = 0; i < curFloor.length; i++) {
-            // A sector needs per-frame interpolation the moment its freshest height differs
+            // A sector needs per-frame interpolation the moment its FRESHEST height differs
             // from the rendered pair (leading edge, cur != prev) through the last gliding tic
             // (trailing edge, prev != prev2). Testing only prev != prev2 lagged one tic behind
-            // syncHeights' static rebake, so the first motion tic snapped the mesh straight to
-            // the new height (then jumped back to start interpolating): the door/lift judder.
+            // syncHeights' static rebake, so the FIRST motion tic snapped the mesh straight to
+            // the new height (then jumped back to start interpolating) — the door/lift judder.
             if (curFloor[i] != prevFloor[i] || prevFloor[i] != prevFloor2[i]
                 || curCeil[i] != prevCeil[i] || prevCeil[i] != prevCeil2[i]) {
                 if (moving == null) {
@@ -2110,9 +2216,9 @@ public final class LatteWorld {
         return moving == null ? Set.of() : moving;
     }
 
-    /** Bake one sector this frame at the interpolated height, one tic behind the engine
-     * (prev2 -> prev), so the rendered pair is always complete and a late tic cannot stall a
-     * sector mid-motion. The cost is 28 ms of mover latency. */
+    /** Bake one sector THIS FRAME at the interpolated height, ONE TIC BEHIND the engine
+     * (prev2 -> prev): the pair being rendered is always complete, so a late tic can
+     * never stall a glide mid-door. 28ms of mover latency is invisible. */
     static Map<String, float[]> bakeInterp(int sector, double a) {
         final LatteMesh.HeightFn hf = new LatteMesh.HeightFn() {
             public double floor(int s2) {
@@ -2132,7 +2238,7 @@ public final class LatteWorld {
         return LatteMesh.buildForInterp(map, tri, sector, cx, cy, hf, lines);
     }
 
-    // Sprite-pass access
+    // sprite-pass access
     static com.blackwithersteve.lattedoom.engine.WorldSnapshot snap() {
         return snap;
     }

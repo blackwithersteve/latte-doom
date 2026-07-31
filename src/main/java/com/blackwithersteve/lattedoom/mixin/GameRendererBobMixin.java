@@ -11,11 +11,11 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * Inside a DOOM level the view bob comes from the engine's own {@code P_CalcHeight}
- * curve, applied to the eye position in {@link DeathCameraMixin}, so Minecraft's
- * pose-swaying head bob is cancelled for every player there. Minecraft's bob is driven by
- * accumulated walk distance and its cadence does not match DOOM movement, which makes the
- * two read as camera shake when combined. Outside a level, vanilla bobbing is untouched.
+ * Inside a DOOM level everyone bobs like DOOM, not Minecraft: the camera lane
+ * (DeathCameraMixin) applies P_CalcHeight's momentum sine to the eye — marine amplitude
+ * from the integrator's momenta, plain Steve's from his actual velocity — so Minecraft's
+ * own pose-swaying head-bob sits out entirely (its cadence read "way too fast" in levels
+ * no matter the walk counters). The overworld keeps vanilla bobbing untouched.
  */
 @Mixin(GameRenderer.class)
 abstract class GameRendererBobMixin {

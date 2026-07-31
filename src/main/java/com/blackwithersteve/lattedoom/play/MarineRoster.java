@@ -5,12 +5,10 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Which players are currently transformed into the DOOM marine.
- *
- * <p>{@link #SERVER} is the authoritative roster: clients announce their form over the
- * network and server-thread mixins read it, for example to suppress item pickup.
- * {@link #CLIENT} is this client's mirror of that roster, broadcast back by the server
- * and read by the avatar renderer so other players are drawn as marine sprites.
+ * Who is currently a DOOM marine — the first synced fact of the server-sync milestone.
+ * SERVER: authoritative roster (fed by LatteNet C2S, read by server-thread mixins like
+ * the item-pickup block). CLIENT: this client's mirror of the roster (fed by S2C, read
+ * by the avatar renderer so OTHER players show as the WAD's PLAY marine).
  */
 public final class MarineRoster {
 

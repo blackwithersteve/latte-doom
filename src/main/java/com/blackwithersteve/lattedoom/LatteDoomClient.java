@@ -20,8 +20,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Client entry point: registers the key bindings, commands, network handlers and the
- * per-tick update that keeps the engine, the world and the HUD in step.
+ * Latte Doom — DOOM (1993) with Minecraft as its source port.
+ * Boot with the keybind (default: =) or /doom.
  */
 public class LatteDoomClient implements ClientModInitializer {
 
@@ -35,6 +35,9 @@ public class LatteDoomClient implements ClientModInitializer {
     private static KeyMapping useKey;
     private static KeyMapping volumeKey;
     private static KeyMapping automapKey;
+    private static KeyMapping gammaKey;
+    private static boolean plusWasDown, minusWasDown;
+    private static boolean pausedByScreen;
     private static LatteDoomConfig config;
 
     /** Hands one {@code /lgive} request to the engine. {@code all} matches IDKFA's set. */
@@ -68,12 +71,14 @@ public class LatteDoomClient implements ClientModInitializer {
             net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource src,
             boolean advanced) {
         final String[][] basic = {
-            {"/load <wad>", "set the game data to play"},
-            {"/pwad <wads|none>", "add patch WADs on top of it"},
+            {"/load <file>", "load anything: a game, a patch WAD or a .deh"},
+            {"/load", "list what is in the wads folder"},
+            {"/pwad <wads|none>", "stack extra patch WADs by hand"},
             {"/warp <map>", "go to a map"},
             {"/doommarine", "become the marine, or change back"},
             {"/doomleave", "return to the overworld"},
             {"/doomvolume", "the mod's own sound and music levels"},
+            {"/doomgamma [0-4]", "brightness, DOOM's own gamma (also F10)"},
             {"/lgive <what>", "give yourself weapons, ammo or keys"},
         };
         final String[][] adv = {
@@ -83,7 +88,7 @@ public class LatteDoomClient implements ClientModInitializer {
             {"/doomwatch", "freeze or resume the engine"},
             {"/doomscreen", "the engine's own framebuffer"},
             {"/doomdiag", "write the diagnostic log"},
-            {"/cull, /persist", "renderer toggles"},
+            {"/cull, /persist, /bsp", "renderer toggles"},
         };
         src.sendFeedback(Component.literal(advanced
             ? "§6Latte Doom§r advanced commands:"
@@ -106,7 +111,7 @@ public class LatteDoomClient implements ClientModInitializer {
         final String n = p.getFileName().toString().toLowerCase(java.util.Locale.ROOT);
         if (n.endsWith(".deh") || n.endsWith(".bex")) {
             return "§e" + p.getFileName() + "§r is a DEHACKED patch, not a WAD."
-                + " Load the WAD that contains it instead.";
+                + " Run §e/load " + p.getFileName() + "§r to apply it over the loaded game.";
         }
         if (n.endsWith(".zip") || n.endsWith(".pk3") || n.endsWith(".pke")
             || n.endsWith(".7z") || n.endsWith(".rar")) {
@@ -130,8 +135,13 @@ public class LatteDoomClient implements ClientModInitializer {
 
     /** Whether the running engine was booted only to supply the weapon and status bar. Such
      * an engine runs its map without monsters, so it must be rebooted before the level is
-     * played rather than entered as it stands. */
+     * actually played rather than entered as it stands. */
     private static boolean suitEngine;
+
+    /** Read access to the live config, for the picker to mirror the loaded set. */
+    public static LatteDoomConfig configView() {
+        return config;
+    }
 
     /** Whether a base WAD is configured and present. Everything else needs one. */
     private static boolean haveWad() {
@@ -167,29 +177,29 @@ public class LatteDoomClient implements ClientModInitializer {
     private static boolean capsWasDown;
     private static int tickCount;
 
-    /** This client's own engine instance, or null when none is running. */
+    /** This client's own engine (the marine suit / the world when we own it), or null. */
     public static DoomHost host() {
         return host;
     }
 
-    /** The mod's own sound-effect level, 0 to 1. Sounds played for a spectator read the
-     * same value, so remote and local audio follow one setting. */
+    /** DOOM's dedicated SFX level (0..1) — the spectator SFX path (DoomSfx) reads this so
+     * remote/world sounds obey the same slider as the local suit. */
     public static float doomSfxVolume() {
         return config != null ? config.doomSfxVolume : 1f;
     }
 
-    /** The persisted skill level, 1 to 5, used by every warp and every engine boot. */
+    /** The persisted DOOM skill (1-5) — every warp and suit boot runs on it. */
     public static int doomSkill() {
         return config != null ? config.doomSkill : 3;
     }
 
-    /** The mod's own music level, 0 to 1. */
+    /** DOOM's dedicated music level (0..1). */
     public static float doomMusicVolume() {
         return config != null ? config.doomMusicVolume : 1f;
     }
 
-    /** Sets an audio level, 0 to 1, persists it and applies it to the running engine.
-     * Returns the clamped value that was applied. */
+    /** Set a DOOM audio level (0..1), persist it, and push it live to the engine.
+     * music=true targets music, else SFX. Returns the clamped value applied. */
     public static float setDoomVolume(boolean music, float v) {
         final float clamped = Math.max(0f, Math.min(1f, v));
         if (config == null) {
@@ -201,8 +211,8 @@ public class LatteDoomClient implements ClientModInitializer {
             config.doomSfxVolume = clamped;
         }
         config.save();
-        // Push immediately so the change is audible at once; the periodic update would
-        // otherwise apply it only on the next tick.
+        // push immediately so the change is audible now (the next tick would too, but this
+        // makes a mid-song music drag apply without waiting on the tick's diff-gate)
         if (host != null) {
             host.setVolumes(Math.round(config.doomSfxVolume * 15f),
                 Math.round(config.doomMusicVolume * 15f));
@@ -210,7 +220,8 @@ public class LatteDoomClient implements ClientModInitializer {
         return clamped;
     }
 
-    /** Opens the sound volume menu, from the command, the key binding or the menu. */
+    /** Open the authentic DOOM Sound Volume menu (bare /doomvolume, keybind, or the
+     * native menu's Options entry). */
     static void openVolume(Minecraft client) {
         if (config == null) {
             config = LatteDoomConfig.load(FabricLoader.getInstance().getConfigDir());
@@ -222,7 +233,7 @@ public class LatteDoomClient implements ClientModInitializer {
         com.blackwithersteve.lattedoom.diag.DoomDiag.logNow("cmd", cmd);
     }
 
-    /** /load by map name ("e1m1", "map07", or a bare warp number). */
+    /** /load by map NAME ("e1m1", "map07", or a bare warp number). */
     private static void loadByName(
             net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource src,
             String name, boolean nomonsters) {
@@ -238,12 +249,13 @@ public class LatteDoomClient implements ClientModInitializer {
             return;
         }
         // The two games name their maps differently, and typing the other game's format is
-        // the commonest mistake. The WAD itself says which scheme applies, so say so and
-        // offer the equivalent rather than warping somewhere the player did not ask for.
-        // A bare number is exempt: it is the engine's own warp argument and means the same
-        // thing in both schemes. The scheme itself is read from the configured WAD rather
-        // than from a level that happens to be raised, because asking the loaded level meant
-        // the first warp of a session defaulted to the DOOM 1 layout even with a DOOM II WAD.
+        // the commonest mistake. A bare number is exempt: it is the engine's own warp
+        // argument and means the same thing in both schemes.
+        //
+        // The scheme is read from the configured WAD file rather than from a level that
+        // happens to be raised. Asking the loaded level meant that before anything had been
+        // raised the answer defaulted to the DOOM 1 layout, so the first warp of a session
+        // was told to use E1M1 even with a DOOM II WAD loaded.
         final boolean bareNumber = want.matches("[0-9]{1,2}");
         final boolean episodes = LatteDoomConfig.hasEpisodes(config.iwadPath);
         final boolean gaveEpisode = want.startsWith("e");
@@ -272,7 +284,7 @@ public class LatteDoomClient implements ClientModInitializer {
         return -1;
     }
 
-    /** Completes map names from the loaded WAD set's own map lumps. */
+    /** Tab-complete map names from the LOADED WAD set's actual map lumps. */
     private static java.util.concurrent.CompletableFuture<com.mojang.brigadier.suggestion.Suggestions>
             suggestMaps(com.mojang.brigadier.context.CommandContext<?> ctx,
                         com.mojang.brigadier.suggestion.SuggestionsBuilder builder) {
@@ -297,7 +309,7 @@ public class LatteDoomClient implements ClientModInitializer {
         return builder.buildFuture();
     }
 
-    /** Completes WAD file names, one token at a time within the patch-WAD list. */
+    /** Tab-complete .wad files (per-token inside the greedy pwad list, like /gamemode sur-). */
     private static java.util.concurrent.CompletableFuture<com.mojang.brigadier.suggestion.Suggestions>
             suggestWads(com.mojang.brigadier.context.CommandContext<?> ctx,
                         com.mojang.brigadier.suggestion.SuggestionsBuilder builder) {
@@ -305,7 +317,7 @@ public class LatteDoomClient implements ClientModInitializer {
             config = LatteDoomConfig.load(FabricLoader.getInstance().getConfigDir());
         }
         final String remaining = builder.getRemaining();
-        // Complete the final token, preserving whatever precedes it.
+        // complete the LAST token; keep what's already typed before it
         final int cut = Math.max(remaining.lastIndexOf(' '), remaining.lastIndexOf(','));
         final String prefix = cut >= 0 ? remaining.substring(0, cut + 1) : "";
         final String token = remaining.substring(cut + 1).toLowerCase(java.util.Locale.ROOT);
@@ -315,7 +327,11 @@ public class LatteDoomClient implements ClientModInitializer {
                 if (java.nio.file.Files.isDirectory(dir)) {
                     try (var s = java.nio.file.Files.list(dir)) {
                         s.map(pth -> pth.getFileName().toString())
-                            .filter(n -> n.toLowerCase(java.util.Locale.ROOT).endsWith(".wad"))
+                            .filter(n -> {
+                                final String l = n.toLowerCase(java.util.Locale.ROOT);
+                                return l.endsWith(".wad") || l.endsWith(".deh")
+                                    || l.endsWith(".bex");
+                            })
                             .forEach(names::add);
                     }
                 }
@@ -331,48 +347,450 @@ public class LatteDoomClient implements ClientModInitializer {
         return builder.buildFuture();
     }
 
-    /** {@code /load}: set the base WAD. Validated by {@link LatteDoomConfig#isIwadFile},
-     * which requires both the {@code IWAD} header magic and a {@code PLAYPAL} lump. */
-    private static void setIwad(
+    /**
+     * /load — the one loading command. A full game boots on its own; a patch WAD finds
+     * its own base game, companion parts and matching .deh; a .deh/.bex file applies over
+     * the loaded game. Nothing from a previous load survives except what this load names.
+     */
+    private static void loadAny(
             net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource src,
             String name) {
+        loadAny((java.util.function.Consumer<Component>) src::sendFeedback, name);
+    }
+
+    /** The same seamless load with feedback to any sink — the WAD picker screen's entry. */
+    public static void loadAny(java.util.function.Consumer<Component> fb, String name) {
         diagCmd("/load " + name);
         if (config == null) {
             config = LatteDoomConfig.load(FabricLoader.getInstance().getConfigDir());
         }
         final java.nio.file.Path p = findWad(name.trim());
         if (p == null) {
-            src.sendFeedback(Component.literal("§cNo file named §e" + name.trim()
-                + "§c.§r Put the WAD in §econfig/latte-doom/§r, or give a full path."));
+            fb.accept(Component.literal("§cNo file named §e" + name.trim()
+                + "§c.§r Put it in §econfig/latte-doom/§r (or its §epwads/§r folder),"
+                + " or give a full path. §e/load§r alone lists what is there."));
+            return;
+        }
+        final String lower = p.getFileName().toString().toLowerCase(java.util.Locale.ROOT);
+        if (lower.endsWith(".deh") || lower.endsWith(".bex")) {
+            loadDehFile(fb, p);
             return;
         }
         final String why = wadRejection(p);
         if (why != null) {
-            src.sendFeedback(Component.literal("§c" + why));
+            fb.accept(Component.literal("§c" + why));
             return;
         }
         final String other = LatteDoomConfig.foreignGame(p);
         if (other != null) {
-            src.sendFeedback(Component.literal("§e" + p.getFileName() + "§c is "
+            fb.accept(Component.literal("§e" + p.getFileName() + "§c is "
                 + other + ", not DOOM.§r This is a DOOM source port and cannot run it."
                 + " Load §eDOOM.WAD§r or §eDOOM2.WAD§r instead."));
             return;
         }
-        if (!LatteDoomConfig.isIwadFile(p)) {
-            // A real WAD, but not one that can stand alone: either a patch WAD or a
-            // resource WAD with no levels. Both are usable, through the other command.
-            src.sendFeedback(Component.literal("§e" + p.getFileName()
-                + "§c is not a full game.§r It has no levels of its own, or it is a patch."
-                + " Load §eDOOM.WAD§r or §eDOOM2.WAD§r first, then add this with §e/pwad "
-                + p.getFileName() + "§r."));
-            return;
+        if (LatteDoomConfig.isIwadFile(p)) {
+            loadBase(fb, p);
+        } else {
+            loadPatch(fb, p);
         }
-        config.iwadPath = p;
-        config.save();
-        applyWadSet();
     }
 
-    /** /pwad: set the PWAD list ("none" clears). Output stays one line. */
+    /** A full game: it IS the whole set. Whatever was stacked before is dropped, and
+     * said so — the silent carry-over is how a smoothing patch ended up inside TNT. */
+    private static void loadBase(java.util.function.Consumer<Component> fb,
+                                 java.nio.file.Path p) {
+        final List<java.nio.file.Path> dropped = new ArrayList<>(config.pwads);
+        config.iwadPath = p;
+        config.pwads.clear();
+        config.dehs.clear();
+        pairDehs(List.of(p));
+        config.save();
+        applyWadSet();
+        final StringBuilder msg = new StringBuilder("§6load:§f ").append(p.getFileName())
+            .append(" §7(").append(LatteDoomConfig.mapCount(p)).append(" maps)§r");
+        for (java.nio.file.Path d : config.dehs) {
+            msg.append(" §7+ ").append(d.getFileName()).append("§r");
+        }
+        fb.accept(Component.literal(msg.toString()));
+        if (!dropped.isEmpty()) {
+            final StringBuilder db = new StringBuilder("§7Dropped: ");
+            for (int i = 0; i < dropped.size(); i++) {
+                db.append(i > 0 ? ", " : "").append(dropped.get(i).getFileName());
+            }
+            db.append("§r");
+            fb.accept(Component.literal(db.toString()));
+        }
+    }
+
+    /** A patch WAD: assemble the whole set around it — base game by map scheme,
+     * companion parts by name, matching .deh files. */
+    private static void loadPatch(java.util.function.Consumer<Component> fb,
+                                 java.nio.file.Path p) {
+        final char fam = LatteDoomConfig.mapScheme(p);
+        final java.nio.file.Path base = pickBase(fam);
+        if (base == null) {
+            fb.accept(Component.literal("§c"
+                + (fam == 'E' ? "DOOM.WAD" : "DOOM2.WAD") + " not present."));
+            return;
+        }
+        final List<java.nio.file.Path> bundle = withCompanions(p);
+        config.iwadPath = base;
+        config.pwads.clear();
+        config.pwads.addAll(bundle);
+        config.dehs.clear();
+        pairDehs(bundle);
+        config.save();
+        applyWadSet();
+        final StringBuilder msg = new StringBuilder("§6load:§f ");
+        for (int i = 0; i < bundle.size(); i++) {
+            msg.append(i > 0 ? " + " : "").append(bundle.get(i).getFileName());
+        }
+        for (java.nio.file.Path d : config.dehs) {
+            msg.append(" §7+ ").append(d.getFileName()).append("§r");
+        }
+        msg.append(" §7over§f ").append(base.getFileName());
+        fb.accept(Component.literal(msg.toString()));
+    }
+
+    /** A standalone DEHACKED/BEX file: applies over the loaded game. */
+    private static void loadDehFile(java.util.function.Consumer<Component> fb,
+                                 java.nio.file.Path p) {
+        // A patch file with a WAD of the same name beside it is the WAD's loose copy:
+        // the WAD embeds the same patch AND carries the sprite lumps the patch's frames
+        // point at. Loading the bare file leaves those frames aimed at art that is not
+        // there, so the WAD is what actually gets loaded.
+        final String stem = p.getFileName().toString()
+            .replaceAll("(?i)\\.(deh|bex)$", "");
+        for (String cand : new String[]{stem + ".wad", stem + ".WAD"}) {
+            final java.nio.file.Path wad = p.resolveSibling(cand);
+            if (java.nio.file.Files.exists(wad)) {
+                fb.accept(Component.literal("§7" + p.getFileName() + " belongs to §e"
+                    + wad.getFileName() + "§7, loading that.§r"));
+                loadPatch(fb, wad);
+                return;
+            }
+        }
+        if (!haveWad()) {
+            fb.accept(Component.literal("§cA DEHACKED patch changes a game, and"
+                + " none is loaded.§r Run §e/load DOOM2.WAD§r (or another game) first."));
+            return;
+        }
+        for (java.nio.file.Path have : config.dehs) {
+            if (have.toAbsolutePath().equals(p.toAbsolutePath())) {
+                fb.accept(Component.literal("§e" + p.getFileName()
+                    + "§r is already applied."));
+                return;
+            }
+        }
+        config.dehs.add(p);
+        config.save();
+        applyWadSet();
+        fb.accept(Component.literal("§6deh:§f " + p.getFileName() + " §7over§f "
+            + config.iwadPath.getFileName()));
+    }
+
+    /** Every usable base game in the two folders. */
+    private static List<java.nio.file.Path> scanBases() {
+        final List<java.nio.file.Path> bases = new ArrayList<>();
+        for (java.nio.file.Path dir : List.of(config.dataDir, config.dataDir.resolve("pwads"))) {
+            if (!java.nio.file.Files.isDirectory(dir)) {
+                continue;
+            }
+            try (var s = java.nio.file.Files.list(dir)) {
+                s.filter(f -> f.getFileName().toString().toLowerCase(java.util.Locale.ROOT)
+                        .endsWith(".wad"))
+                    .sorted()
+                    .filter(LatteDoomConfig::isIwadFile)
+                    .filter(f -> LatteDoomConfig.foreignGame(f) == null)
+                    .forEach(bases::add);
+            } catch (java.io.IOException ignored) {
+            }
+        }
+        return bases;
+    }
+
+    /**
+     * The base game for a patch of this family: 'E' wants DOOM, 'M' wants DOOM II, 'A'
+     * (no maps) keeps the loaded game or takes what is there, 'B' takes either. The plain
+     * game is preferred over TNT or Plutonia, so a patch never lands on a base whose own
+     * maps and textures differ from what it was built against.
+     */
+    private static java.nio.file.Path pickBase(char fam) {
+        if (fam == 'A' && haveWad()) {
+            return config.iwadPath;
+        }
+        final List<java.nio.file.Path> bases = scanBases();
+        final String[] preferred = fam == 'E'
+            ? new String[]{"DOOM.WAD", "DOOMU.WAD", "DOOM1.WAD", "FREEDOOM1.WAD"}
+            : new String[]{"DOOM2.WAD", "FREEDOOM2.WAD", "TNT.WAD", "PLUTONIA.WAD"};
+        for (String want : preferred) {
+            for (java.nio.file.Path b : bases) {
+                if (b.getFileName().toString().equalsIgnoreCase(want)) {
+                    return b;
+                }
+            }
+        }
+        for (java.nio.file.Path b : bases) {
+            final char s = LatteDoomConfig.mapScheme(b);
+            if (fam == 'A' || fam == 'B' || s == fam || s == 'B') {
+                return b;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * A multi-part release ships as one name with a letter suffix (btsx_e2a + btsx_e2b)
+     * and both halves load together everywhere else. Two or more same-stem siblings in
+     * the file's own folder are taken as one bundle, alphabetically.
+     */
+    private static List<java.nio.file.Path> withCompanions(java.nio.file.Path p) {
+        final String file = p.getFileName().toString();
+        final int dot = file.lastIndexOf('.');
+        final String stem = (dot > 0 ? file.substring(0, dot) : file)
+            .toLowerCase(java.util.Locale.ROOT);
+        if (stem.length() < 2 || !Character.isLetter(stem.charAt(stem.length() - 1))) {
+            return List.of(p);
+        }
+        final String root = stem.substring(0, stem.length() - 1);
+        final List<java.nio.file.Path> parts = new ArrayList<>();
+        try (var s = java.nio.file.Files.list(p.getParent())) {
+            s.sorted().forEach(f -> {
+                final String n = f.getFileName().toString().toLowerCase(java.util.Locale.ROOT);
+                if (n.length() == root.length() + 5 && n.startsWith(root)
+                    && Character.isLetter(n.charAt(root.length())) && n.endsWith(".wad")
+                    && !LatteDoomConfig.isIwadFile(f)
+                    && LatteDoomConfig.foreignGame(f) == null) {
+                    parts.add(f);
+                }
+            });
+        } catch (java.io.IOException ignored) {
+        }
+        return parts.size() >= 2 ? parts : List.of(p);
+    }
+
+    /**
+     * Loose .deh/.bex files whose name matches a WAD in the set apply with it, the way
+     * source ports pair them — unless a WAD already embeds a DEHACKED lump, which is the
+     * same content brought along properly.
+     */
+    private static void pairDehs(List<java.nio.file.Path> bundle) {
+        for (java.nio.file.Path w : bundle) {
+            if (LatteDoomConfig.hasDehackedLump(w)) {
+                return;
+            }
+        }
+        final List<String> stems = new ArrayList<>();
+        for (java.nio.file.Path w : bundle) {
+            final String f = w.getFileName().toString();
+            final int dot = f.lastIndexOf('.');
+            stems.add((dot > 0 ? f.substring(0, dot) : f).toLowerCase(java.util.Locale.ROOT));
+        }
+        for (java.nio.file.Path dir : List.of(config.dataDir, config.dataDir.resolve("pwads"))) {
+            if (!java.nio.file.Files.isDirectory(dir)) {
+                continue;
+            }
+            try (var s = java.nio.file.Files.list(dir)) {
+                s.sorted().forEach(f -> {
+                    final String n = f.getFileName().toString().toLowerCase(java.util.Locale.ROOT);
+                    if (!n.endsWith(".deh") && !n.endsWith(".bex")) {
+                        return;
+                    }
+                    final String stem = n.substring(0, n.lastIndexOf('.'));
+                    for (String w : stems) {
+                        if ((w.startsWith(stem) || stem.startsWith(w))
+                            && !config.dehs.contains(f)) {
+                            config.dehs.add(f);
+                            return;
+                        }
+                    }
+                });
+            } catch (java.io.IOException ignored) {
+            }
+        }
+    }
+
+    /** Whether a base WAD is configured — the picker opens first when none is. */
+    public static boolean hasGameData() {
+        return haveWad();
+    }
+
+    /** The game a patch WAD is for, when one is in the folder — the picker's
+     * auto-select when a patch is chosen with no game. Null when unknown or absent. */
+    public static String suggestedBaseFor(String patchName) {
+        final java.nio.file.Path f = findWad(patchName);
+        if (f == null) {
+            return null;
+        }
+        final java.nio.file.Path base = pickBase(LatteDoomConfig.mapScheme(f));
+        return base != null ? base.getFileName().toString() : null;
+    }
+
+    /** The picker's three columns: [0] games, [1] patch WADs, [2] patch files. */
+    public static List<List<String>> pickerCategories() {
+        if (config == null) {
+            config = LatteDoomConfig.load(FabricLoader.getInstance().getConfigDir());
+        }
+        final List<String> games = new ArrayList<>();
+        final List<String> patches = new ArrayList<>();
+        final List<String> dehs = new ArrayList<>();
+        for (java.nio.file.Path dir : List.of(config.dataDir, config.dataDir.resolve("pwads"))) {
+            if (!java.nio.file.Files.isDirectory(dir)) {
+                continue;
+            }
+            try (var s = java.nio.file.Files.list(dir)) {
+                s.sorted().forEach(f -> {
+                    final String n = f.getFileName().toString();
+                    final String l = n.toLowerCase(java.util.Locale.ROOT);
+                    if (l.endsWith(".deh") || l.endsWith(".bex")) {
+                        dehs.add(n);
+                    } else if (l.endsWith(".wad") && LatteDoomConfig.foreignGame(f) == null) {
+                        (LatteDoomConfig.isIwadFile(f) ? games : patches).add(n);
+                    }
+                });
+            } catch (java.io.IOException ignored) {
+            }
+        }
+        return List.of(games, patches, dehs);
+    }
+
+    /**
+     * The picker's LOAD: exactly the chosen files, nothing inferred. A null game keeps
+     * the loaded one. Every file is re-validated here — the picker's lists are a display,
+     * not an authority, and the folder can change between drawing and pressing LOAD.
+     */
+    public static void loadSelection(java.util.function.Consumer<Component> fb, String game,
+            java.util.Collection<String> patches, java.util.Collection<String> dehFiles) {
+        if (config == null) {
+            config = LatteDoomConfig.load(FabricLoader.getInstance().getConfigDir());
+        }
+        java.nio.file.Path base;
+        if (game != null) {
+            base = findWad(game);
+            if (base == null) {
+                fb.accept(Component.literal("§c" + game + " not present."));
+                return;
+            }
+            if (LatteDoomConfig.foreignGame(base) != null
+                || !LatteDoomConfig.isIwadFile(base)) {
+                fb.accept(Component.literal("§c" + game + " is not a game."));
+                return;
+            }
+        } else if (haveWad()) {
+            base = config.iwadPath;
+        } else {
+            fb.accept(Component.literal("§cNo game selected."));
+            return;
+        }
+        final List<java.nio.file.Path> pw = new ArrayList<>();
+        for (String n : patches) {
+            final java.nio.file.Path f = findWad(n);
+            if (f == null) {
+                fb.accept(Component.literal("§c" + n + " not present."));
+                return;
+            }
+            if (f.toAbsolutePath().equals(base.toAbsolutePath())) {
+                continue;
+            }
+            if (LatteDoomConfig.isIwadFile(f)) {
+                fb.accept(Component.literal("§c" + n + " is a game, not a patch."));
+                return;
+            }
+            final String why = wadRejection(f);
+            if (why != null) {
+                fb.accept(Component.literal("§c" + why));
+                return;
+            }
+            if (!pw.contains(f)) {
+                pw.add(f);
+            }
+        }
+        final List<java.nio.file.Path> dh = new ArrayList<>();
+        for (String n : dehFiles) {
+            final java.nio.file.Path f = findWad(n);
+            final String l = n.toLowerCase(java.util.Locale.ROOT);
+            if (f == null) {
+                fb.accept(Component.literal("§c" + n + " not present."));
+                return;
+            }
+            if (!l.endsWith(".deh") && !l.endsWith(".bex")) {
+                fb.accept(Component.literal("§c" + n + " is not a patch file."));
+                return;
+            }
+            if (!dh.contains(f)) {
+                dh.add(f);
+            }
+        }
+        config.iwadPath = base;
+        config.pwads.clear();
+        config.pwads.addAll(pw);
+        config.dehs.clear();
+        config.dehs.addAll(dh);
+        config.save();
+        applyWadSet();
+        final StringBuilder msg = new StringBuilder("§6load:§f ")
+            .append(base.getFileName());
+        for (java.nio.file.Path f : pw) {
+            msg.append(" + ").append(f.getFileName());
+        }
+        for (java.nio.file.Path f : dh) {
+            msg.append(" + ").append(f.getFileName());
+        }
+        fb.accept(Component.literal(msg.toString()));
+    }
+
+    /** Bare /load: what is in the folders, sorted into what each file is. */
+    private static void listWads(
+            net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource src) {
+        if (config == null) {
+            config = LatteDoomConfig.load(FabricLoader.getInstance().getConfigDir());
+        }
+        final List<String> games = new ArrayList<>();
+        final List<String> patches = new ArrayList<>();
+        final List<String> dehs = new ArrayList<>();
+        for (java.nio.file.Path dir : List.of(config.dataDir, config.dataDir.resolve("pwads"))) {
+            if (!java.nio.file.Files.isDirectory(dir)) {
+                continue;
+            }
+            try (var s = java.nio.file.Files.list(dir)) {
+                s.sorted().forEach(f -> {
+                    final String n = f.getFileName().toString();
+                    final String l = n.toLowerCase(java.util.Locale.ROOT);
+                    if (l.endsWith(".deh") || l.endsWith(".bex")) {
+                        dehs.add(n);
+                    } else if (l.endsWith(".wad")) {
+                        if (LatteDoomConfig.foreignGame(f) != null) {
+                            return; // not DOOM's; the load path explains if tried
+                        }
+                        if (LatteDoomConfig.isIwadFile(f)) {
+                            games.add(n);
+                        } else {
+                            final char fam = LatteDoomConfig.mapScheme(f);
+                            patches.add(n + (fam == 'E' ? " §7(DOOM)§r"
+                                : fam == 'M' ? " §7(DOOM II)§r" : ""));
+                        }
+                    }
+                });
+            } catch (java.io.IOException ignored) {
+            }
+        }
+        if (games.isEmpty() && patches.isEmpty() && dehs.isEmpty()) {
+            src.sendFeedback(Component.literal("§cNothing in §econfig/latte-doom/§c yet.§r"
+                + " Put a DOOM or DOOM II WAD there."));
+            return;
+        }
+        if (!games.isEmpty()) {
+            src.sendFeedback(Component.literal("§6Games:§f " + String.join(", ", games)));
+        }
+        if (!patches.isEmpty()) {
+            src.sendFeedback(Component.literal("§6Patches:§f " + String.join(", ", patches)));
+        }
+        if (!dehs.isEmpty()) {
+            src.sendFeedback(Component.literal("§6DEH:§f " + String.join(", ", dehs)));
+        }
+    }
+
+    /** /pwad — set the PWAD list ("none" clears). Output stays one line. */
     private static void setPwads(
             net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource src,
             String list) {
@@ -390,9 +808,8 @@ public class LatteDoomClient implements ClientModInitializer {
         }
         final java.util.List<java.nio.file.Path> wads = new ArrayList<>();
         if (!list.trim().equalsIgnoreCase("none")) {
-            // Split on commas only. Splitting on whitespace as well would make a WAD whose
-            // name contains a space impossible to load, while tab completion went on
-            // suggesting it.
+            // Split on commas only. Splitting on whitespace made any WAD with a space in
+            // its name impossible to load, while tab-completion went on suggesting it.
             for (String name : list.split(",")) {
                 if (name.isBlank()) {
                     continue;
@@ -431,8 +848,8 @@ public class LatteDoomClient implements ClientModInitializer {
         config.pwads.clear();
         config.pwads.addAll(wads);
         if (wads.size() > 1) {
-            // Later entries override earlier ones, which is the opposite of the common
-            // assumption when a mapset and a texture pack disagree.
+            // Later entries override earlier ones, which is the opposite of what people
+            // assume when a mapset and a texture pack disagree.
             src.sendFeedback(Component.literal("§7Loaded in order; later WADs override"
                 + " earlier ones.§r"));
         }
@@ -459,7 +876,7 @@ public class LatteDoomClient implements ClientModInitializer {
         }
     }
 
-    /** Name resolution: absolute path, data dir, pwads/, with .wad appended if missing. */
+    /** Name resolution: absolute path, data dir, pwads/ — with .wad appended if missing. */
     private static java.nio.file.Path findWad(String rawName) {
         // A pasted Windows path usually arrives wrapped in quotes, and Path.of rejects them
         // with an exception that Brigadier prints raw, naming Java rather than this mod.
@@ -497,10 +914,103 @@ public class LatteDoomClient implements ClientModInitializer {
             Math.round(doomSfxVolume() * 100f), Math.round(doomMusicVolume() * 100f))));
     }
 
+    /** DOOM's own gamma strings, so the overlay reads like F11 always has. */
+    private static final String[] GAMMA_MSG = {
+        doom.englsh.GAMMALVL0, doom.englsh.GAMMALVL1, doom.englsh.GAMMALVL2,
+        doom.englsh.GAMMALVL3, doom.englsh.GAMMALVL4};
 
-    /** Tears everything down on world exit. The engine, the raised level and the
-     * transformed form must not carry into the next world, where the player would otherwise
-     * arrive transformed with a level standing around them. */
+    private static void setGamma(int level) {
+        final int lvl = Math.max(0, Math.min(4, level));
+        com.blackwithersteve.lattedoom.render.LatteMesh.setGamma(lvl);
+        if (config != null) {
+            config.gamma = lvl;
+            config.save();
+        }
+        final Minecraft mc = Minecraft.getInstance();
+        if (mc.player != null) {
+            mc.player.sendOverlayMessage(Component.literal(GAMMA_MSG[lvl]));
+        }
+    }
+
+    private static void cycleGamma(Minecraft client) {
+        setGamma((com.blackwithersteve.lattedoom.render.LatteMesh.gamma() + 1) % 5);
+    }
+
+    /** Interface size 0-2, read by the HUD each frame; set from the options menu and
+     * the +/- keys. */
+    public static int hudSize() {
+        return config != null ? config.hudSize : 0;
+    }
+
+    public static void setHudSize(int size) {
+        final int s = Math.max(0, Math.min(2, size));
+        if (config != null && config.hudSize != s) {
+            config.hudSize = s;
+            config.save();
+        }
+    }
+
+    public static int crosshair() {
+        return config != null ? config.crosshair : 0;
+    }
+
+    public static void setCrosshair(int mode) {
+        if (config != null) {
+            config.crosshair = Math.max(0, Math.min(2, mode));
+            config.save();
+        }
+    }
+
+    public static boolean levelStats() {
+        return config != null && config.levelStats;
+    }
+
+    public static void setLevelStats(boolean on) {
+        if (config != null) {
+            config.levelStats = on;
+            config.save();
+        }
+    }
+
+    public static boolean freelook() {
+        return config == null || config.freelook;
+    }
+
+    public static void setFreelook(boolean on) {
+        if (config != null) {
+            config.freelook = on;
+            config.save();
+        }
+    }
+
+    public static int bobScale() {
+        return config != null ? config.bobScale : 0;
+    }
+
+    public static void setBobScale(int mode) {
+        if (config != null) {
+            config.bobScale = Math.max(0, Math.min(2, mode));
+            config.save();
+        }
+    }
+
+    public static int lightBoost() {
+        return com.blackwithersteve.lattedoom.render.LatteMesh.lightBoost();
+    }
+
+    public static void setLightBoost(int notches) {
+        final int n = Math.max(0, Math.min(4, notches));
+        com.blackwithersteve.lattedoom.render.LatteMesh.setLightBoost(n);
+        if (config != null && config.lightBoost != n) {
+            config.lightBoost = n;
+            config.save();
+        }
+    }
+
+
+    /** Leaving a world takes DOOM with it: the engine, the raised level and the
+     * transformed state must not leak into the next world (a fresh world would
+     * otherwise open with the DOOM HUD up and a level already standing). */
     public static void resetOnDisconnect() {
         if (host != null) {
             // Await the unwind rather than firing terminate() and moving on. The engine runs
@@ -516,11 +1026,16 @@ public class LatteDoomClient implements ClientModInitializer {
 
     @Override
     public void onInitializeClient() {
-        LOGGER.info("Latte Doom initializing");
+        LOGGER.info("Latte Doom initializing — Minecraft is now a DOOM source port");
 
-        // The first MIDI device open in the process can stall for ten seconds or more,
-        // and an engine booting into that stall never reaches its level. One open and close
-        // cycle in the background at startup leaves the path warm before any engine boots.
+        // MIDI warm-up: the FIRST MIDI device open inside the Minecraft process can stall
+        // 10+ seconds on Windows (fresh provider scan + endpoint open against MC's live
+        // audio stack) — that was the "/doommarine showed no HUD" window: the suit engine
+        // sat in music init, never reaching the level, so there was no snapshot to draw.
+        // Do the full open/close cycle ONCE, in the background, at mod init — no engine
+        // can be running yet, and by the time any engine boots the path is warm. The logged
+        // duration doubles as the diagnosis: a five-digit number here CONFIRMS the stall
+        // was MIDI's (and that it now happens before the user ever notices).
         final Thread midiWarm = new Thread(() -> {
             final long t0 = System.currentTimeMillis();
             try {
@@ -535,21 +1050,20 @@ public class LatteDoomClient implements ClientModInitializer {
         midiWarm.setDaemon(true);
         midiWarm.start();
 
-        // Clear all session state when leaving a world. Without this, a new world joined
-        // in the same Minecraft run inherits the previous world's entire session: the
-        // engine, the level origin, the warp flags and the mirrored positions, which then
-        // apply to a world they do not describe.
+        // THE WORLD-CHANGE SWEEP — this registration was MISSING: resetOnDisconnect
+        // existed but nothing ever called it on an actual disconnect, so a new world in
+        // the same Minecraft run inherited the old world's ENTIRE DOOM session (engine,
+        // warp flags, level origin, mirror positions) — the /doommarine mid-air ghost.
         net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents.DISCONNECT
             .register((handler, client) -> client.execute(LatteDoomClient::resetOnDisconnect));
         net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents.JOIN
             .register((handler, sender, client) ->
                 client.execute(() -> {
                     com.blackwithersteve.lattedoom.render.LatteWorld.fullSessionReset();
-                    // Re-read the settings on every join, not only the first. The
-                    // no-game-data notice asks the player to add a WAD and rejoin, so the
-                    // folder has to be scanned again for that instruction to hold; loading
-                    // only while the settings were still null left the same notice printing
-                    // forever.
+                    // Re-read on every join, not only the first. The no-game-data notice
+                    // tells the player to add a WAD and rejoin, and that instruction was
+                    // false while this only loaded when the settings were still null: the
+                    // folder was never scanned again and the same notice printed forever.
                     final boolean hadWad = haveWad();
                     config = LatteDoomConfig.load(FabricLoader.getInstance().getConfigDir());
                     com.blackwithersteve.lattedoom.render.LatteWorld.setPwads(config.pwads);
@@ -559,15 +1073,14 @@ public class LatteDoomClient implements ClientModInitializer {
                             + config.iwadPath.getFileName() + "§r. Run §e/warp e1m1§r"
                             + " or press §eM§r for the menu."));
                     }
-                    // Scavenging table: (re)read per world join so config edits apply
+                    // scavenging table: (re)read per world join so config edits apply
                     // without a game restart
                     PickupConfig.reload(config.dataDir);
                 }));
-        // Placing blocks against the level's rendered geometry. Minecraft only reaches this
-        // callback when its own ray hit no real block, which is always the case inside a
-        // level, since the level is rendered geometry in an otherwise empty dimension and
-        // offers no block face to click. The level mesh is therefore ray-marched for a
-        // target cell and the server performs the placement.
+        // B2 (blocks inside levels): right-clicking a block item at the DRAWN level.
+        // Vanilla only reaches this callback when its own ray hit NO real block — the
+        // level is rendered geometry in a void dim, so the first block has nothing to
+        // click against. Ray-march the doom mesh for the cell and let the server place.
         net.fabricmc.fabric.api.event.player.UseItemCallback.EVENT.register(
             (player, world, hand) -> {
                 if (!world.isClientSide()
@@ -607,38 +1120,43 @@ public class LatteDoomClient implements ClientModInitializer {
                 return net.minecraft.world.InteractionResult.SUCCESS;
             });
 
-        // Eager WAD scan: the join handshake needs this client's base WAD before any
-        // command has had a chance to run.
+        // eager IWAD scan: the join handshake (WAD disclaimer) needs to know what we
+        // have before any command ever runs
         config = LatteDoomConfig.load(FabricLoader.getInstance().getConfigDir());
         com.blackwithersteve.lattedoom.render.LatteWorld.setPwads(config.pwads); // SIGIL etc. merge
         com.blackwithersteve.lattedoom.net.LatteNet.init(
             () -> config != null ? config.iwadPath : null); // marine sync + WAD handshake
 
-        // The menu key defaults to M: a plain letter occupies the same position on every
-        // keyboard layout, whereas punctuation keys may be dead keys on some of them. All
-        // of these bindings can be changed under Options, Controls, Key Binds, in the
-        // "Latte Doom" category.
+        // default M (menu): a plain letter sits in the same spot on every layout — the old
+        // `=` default was a dead-key position on German QWERTZ. All of these are rebindable
+        // in Options -> Controls -> Key Binds under the "Latte Doom" category.
         bootKey = KeyMappingHelper.registerKeyMapping(
             new KeyMapping("key.lattedoom.boot", GLFW.GLFW_KEY_M, CATEGORY));
         useKey = KeyMappingHelper.registerKeyMapping(
             new KeyMapping("key.lattedoom.use", GLFW.GLFW_KEY_R, CATEGORY));
-        // Sound volume menu, also reachable through /doomvolume. Unbound by default, so no
-        // vanilla binding is taken; a key can be assigned under Controls.
+        // DOOM Sound Volume menu — unbound by default (also reachable via /doomvolume); the
+        // user binds it in Controls if they want a hotkey, so we never stomp a vanilla key.
         volumeKey = KeyMappingHelper.registerKeyMapping(
             new KeyMapping("key.lattedoom.volume", GLFW.GLFW_KEY_UNKNOWN, CATEGORY));
-        // The automap uses the original's Tab key. It coexists with the player list, which
-        // is shown while held, because this binding toggles instead.
+        // the automap on DOOM's own Tab (rebindable; coexists with the player list —
+        // that's hold-to-show, this toggles)
         automapKey = KeyMappingHelper.registerKeyMapping(
             new KeyMapping("key.lattedoom.automap", GLFW.GLFW_KEY_TAB, CATEGORY));
+        // gamma on F10 rather than DOOM's F11, which Minecraft owns for fullscreen
+        gammaKey = KeyMappingHelper.registerKeyMapping(
+            new KeyMapping("key.lattedoom.gamma", GLFW.GLFW_KEY_F10, CATEGORY));
+        com.blackwithersteve.lattedoom.render.LatteMesh.setGamma(config.gamma);
+        com.blackwithersteve.lattedoom.render.LatteMesh.setLightBoost(config.lightBoost);
+        com.blackwithersteve.lattedoom.render.LatteMesh.setBspMode(config.bspMesh);
 
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
-            // Alt-tabbing must not pause the world: the engine keeps running regardless, and
-            // a paused client against a live engine desynchronises the two.
+            // alt-tabbing must not pause the world (the DOOM engine keeps running anyway;
+            // a paused MC against a live engine is the worst of both)
             if (client.options.pauseOnLostFocus) {
                 client.options.pauseOnLostFocus = false;
             }
-            // Keyboard rules for a transformed player: Caps Lock toggles always-run (Shift is
-            // hold-to-run), and the Minecraft inventory is unavailable, so E closes itself.
+            // MARINE FORM keyboard law: Caps Lock toggles DOOM always-run (shift = hold-to-
+            // run), and the Minecraft inventory does not exist — E closes itself.
             final boolean caps = org.lwjgl.glfw.GLFW.glfwGetKey(client.getWindow().handle(),
                 GLFW.GLFW_KEY_CAPS_LOCK) == GLFW.GLFW_PRESS;
             if (caps && !capsWasDown && com.blackwithersteve.lattedoom.render.LatteWorld.marineForm()) {
@@ -649,15 +1167,15 @@ public class LatteDoomClient implements ClientModInitializer {
                 && client.gui.screen() instanceof net.minecraft.client.gui.screens.inventory.InventoryScreen) {
                 client.gui.setScreen(null);
             }
-            // A transformed player gets the DOOM death screen instead of Minecraft's: a red
-            // fade over the sinking view, with fire or use to respawn. The swap runs exactly
-            // once per death, so the death sound (DSPLDETH, from the player's own WAD, on the
-            // mod's own sfx level) is played here as well.
+            // a MARINE's death is DOOM's: swap Minecraft's "You Died!" screen for the DOOM
+            // death — red fade over the sinking view, fire/use to rise again (reborn lane).
+            // The swap fires exactly once per death, so the death scream plays here too
+            // (DSPLDETH, from the player's own WAD, on the dedicated DOOM sfx slider).
             if (com.blackwithersteve.lattedoom.render.LatteWorld.marineForm()
                 && client.gui.screen() instanceof net.minecraft.client.gui.screens.DeathScreen) {
                 client.gui.setScreen(new DoomDeathScreen());
                 com.blackwithersteve.lattedoom.render.DoomSfx.play(
-                    data.sounds.sfxenum_t.sfx_pldeth.ordinal(), false, 0, 0, 0.4);
+                    data.sounds.sfxenum_t.sfx_pldeth.ordinal(), false, 0, 0);
             }
             while (bootKey.consumeClick()) {
                 if (client.gui.screen() == null) {
@@ -665,8 +1183,8 @@ public class LatteDoomClient implements ClientModInitializer {
                 }
             }
             while (useKey.consumeClick()) {
-                // The use action: the engine's own P_UseLines at the mirrored position.
-                // On someone else's level the press ships upstream to their engine.
+                // the marine's USE: the engine's own P_UseLines at your mirrored position.
+                // On someone ELSE's level the press ships upstream to THEIR engine.
                 if (com.blackwithersteve.lattedoom.render.LatteWorld.worldIsRemoteNow(client)) {
                     com.blackwithersteve.lattedoom.render.LatteWorld.queueRemoteUse();
                 } else if (com.blackwithersteve.lattedoom.render.LatteWorld.playMode() && host != null) {
@@ -678,8 +1196,67 @@ public class LatteDoomClient implements ClientModInitializer {
                     openVolume(client);
                 }
             }
+            while (gammaKey.consumeClick()) {
+                cycleGamma(client);
+            }
+            // THE PAUSE, tick-driven: any pausing screen freezes the engine in genuine
+            // singleplayer — the DOOM menu, the volume screen, and Minecraft's own Esc
+            // menu, which pauses the integrated server but never knew about the engine
+            // thread. An explicit list, because intermission/finale screens must run.
+            if (host != null) {
+                final var scr = client.gui.screen();
+                final var ssp = client.getSingleplayerServer();
+                final boolean wantPause = scr != null && ssp != null
+                    && ssp.getPlayerCount() <= 1
+                    && !com.blackwithersteve.lattedoom.render.LatteWorld.worldIsRemoteNow(client)
+                    && (scr instanceof net.minecraft.client.gui.screens.PauseScreen
+                        || scr instanceof LatteMenuScreen
+                        || scr instanceof LatteVolumeScreen);
+                if (wantPause && !host.isFrozen()) {
+                    host.setFrozen(true);
+                    pausedByScreen = true;
+                } else if (!wantPause && pausedByScreen) {
+                    if (host.isFrozen()) {
+                        host.setFrozen(false);
+                    }
+                    pausedByScreen = false;
+                }
+            }
+            // no free look: the pitch INPUT is blocked (PitchLockMixin), so there is
+            // nothing to fight — this only eases an already-pitched view back to level
+            // once, for the moment the setting turns off mid-game.
+            if (!freelook() && client.player != null
+                && (com.blackwithersteve.lattedoom.render.LatteWorld.marineForm()
+                    || com.blackwithersteve.lattedoom.render.LatteWorld.playMode())) {
+                final float pitch = client.player.getXRot();
+                if (Math.abs(pitch) > 0.25f) {
+                    client.player.setXRot(pitch * 0.7f);
+                } else if (pitch != 0f) {
+                    client.player.setXRot(0f);
+                }
+            }
+            // the +/- interface-size keys, source-port style: minus = more interface,
+            // equals/plus = more screen. Only in play, so typing in menus never resizes.
+            if (client.gui.screen() == null
+                && com.blackwithersteve.lattedoom.render.LatteWorld.playMode()) {
+                final long win2 = client.getWindow().handle();
+                final boolean plus = GLFW.glfwGetKey(win2, GLFW.GLFW_KEY_EQUAL) == GLFW.GLFW_PRESS;
+                final boolean minus = GLFW.glfwGetKey(win2, GLFW.GLFW_KEY_MINUS) == GLFW.GLFW_PRESS;
+                if (plus && !plusWasDown && hudSize() < 2) {
+                    setHudSize(hudSize() + 1);
+                    com.blackwithersteve.lattedoom.render.DoomSfx.play(
+                        data.sounds.sfxenum_t.sfx_stnmov.ordinal(), false, 0, 0);
+                }
+                if (minus && !minusWasDown && hudSize() > 0) {
+                    setHudSize(hudSize() - 1);
+                    com.blackwithersteve.lattedoom.render.DoomSfx.play(
+                        data.sounds.sfxenum_t.sfx_stnmov.ordinal(), false, 0, 0);
+                }
+                plusWasDown = plus;
+                minusWasDown = minus;
+            }
             while (automapKey.consumeClick()) {
-                // The automap requires both a standing level and a transformed player
+                // the automap needs a standing level + the marine's map sense
                 if (client.gui.screen() == null
                     && com.blackwithersteve.lattedoom.render.LatteWorld.map() != null
                     && com.blackwithersteve.lattedoom.render.LatteWorld.marineForm()) {
@@ -687,7 +1264,7 @@ public class LatteDoomClient implements ClientModInitializer {
                 }
             }
             if (com.blackwithersteve.lattedoom.render.DoomAutomap.active()) {
-                // Vanilla zoom: keypad +/- (layout-safe), 1.02x per tic while held
+                // vanilla zoom: keypad +/- (layout-safe), 1.02x per tic while held
                 final long win = client.getWindow().handle();
                 if (GLFW.glfwGetKey(win, GLFW.GLFW_KEY_KP_ADD) == GLFW.GLFW_PRESS) {
                     com.blackwithersteve.lattedoom.render.DoomAutomap.zoom(true);
@@ -700,13 +1277,12 @@ public class LatteDoomClient implements ClientModInitializer {
                     com.blackwithersteve.lattedoom.render.DoomAutomap.reset(); // level/form gone
                 }
             }
-            // Intermission and finale screens. Crossing an exit opens the tally drawn from
-            // the WAD's own art, and finishing an episode opens the finale text; neither
-            // shows the engine's framebuffer. Each screen forwards key presses to the
-            // engine, which remains the authority on advancing, and closes itself once the
-            // next state arrives.
-            // HadLevel() excludes engine start-up states, and the warped-in flag excludes
-            // engines booted only to supply weapons and the HUD.
+            // THE DOOM SHELL — intermission and finale, NATIVE: crossing an exit auto-opens
+            // the Minecraft-rendered WI tally (WAD art, counting stats, pistol ticks);
+            // an episode end opens the native finale (typewriter text over the flat).
+            // Never the engine framebuffer. Each screen forwards presses to the engine
+            // (the authority on advancing) and closes itself when the next state lands.
+            // hadLevel() gates out engine-boot init states; warpedIn gates out suit-only boots.
             if (host != null && client.gui.screen() == null
                 && com.blackwithersteve.lattedoom.render.LatteWorld.warpedIn()
                 && !com.blackwithersteve.lattedoom.render.LatteWorld.worldIsRemoteNow(client)
@@ -719,32 +1295,30 @@ public class LatteDoomClient implements ClientModInitializer {
                 }
             }
             if (host != null) {
-                // DOOM audio has its own levels, independent of Minecraft's master and
-                // music sliders, so the two can be balanced separately. While spectating
-                // another player's world this client's own engine is muted, because the
-                // world's sounds arrive over the network instead; its music continues,
-                // since it plays the same map.
+                // DOOM audio runs on its OWN dedicated sliders (config.doomSfxVolume /
+                // doomMusicVolume, 0..1), fully independent of Minecraft's MASTER/MUSIC — the
+                // "its own sliders" ask. While SPECTATING someone else's world, the private
+                // suit engine's sfx are muted — world sounds arrive over the wire instead
+                // (the suit's music keeps playing: it runs the shared map's track).
                 final boolean spectating =
                     com.blackwithersteve.lattedoom.render.LatteWorld.worldIsRemoteNow(client);
-                // An engine booted only to supply weapons and the HUD stays silent: the
-                // level's music plays when the player is in a level session,
-                // whether their own or one they are spectating.
+                // suit-only boots stay quiet on music: the overworld must not run level
+                // music — the level's track plays when you're actually in a level
+                // session (warped in, or spectating a shared world)
                 final boolean musicOn =
                     com.blackwithersteve.lattedoom.render.LatteWorld.musicShouldPlay(client);
                 host.setVolumes(
                     spectating ? 0 : Math.round(config.doomSfxVolume * 15f),
                     musicOn ? Math.round(config.doomMusicVolume * 15f) : 0);
-                // The player's form drives pickups, voice permissions and damage
-                // translation, and is set unconditionally so it cannot go stale outside a
-                // level.
+                // form state feeds pickups, voice permissions, damage translation —
+                // set unconditionally (it used to go stale outside the level)
                 host.setMarineMode(com.blackwithersteve.lattedoom.render.LatteWorld.marineForm());
                 host.setScavengeSprites(PickupConfig.consumableSprites());
-                // The engine's own view is rendered only for the diagnostic framebuffer
-                // screen, since the Minecraft world is the renderer. Leaving it off frees
-                // the engine thread and keeps its tic rate steady.
+                // the software view renders ONLY for the debug framebuffer screen — the
+                // Minecraft world is the renderer (frees the engine thread = steady 35Hz)
                 host.setViewRender(client.gui.screen() instanceof LatteDoomScreen);
             }
-            // Window title for a second local instance, so the two can be told apart.
+            // apply a per-instance window title when one is configured
             if (tickCount++ % 40 == 0) {
                 final String title = System.getProperty("lattedoom.title");
                 if (title != null) {
@@ -762,7 +1336,7 @@ public class LatteDoomClient implements ClientModInitializer {
                 client.execute(() -> openDoom(client));
                 return Command.SINGLE_SUCCESS;
             }));
-            // /cull [on|off]: toggle per-sector frustum culling.
+            // /cull [on|off] — toggle S1 frustum culling (the A/B for the perf video).
             dispatcher.register(ClientCommands.literal("cull")
                 .executes(ctx -> {
                     setCull(!com.blackwithersteve.lattedoom.render.LatteWorldRenderer.CULL_ENABLED);
@@ -776,9 +1350,9 @@ public class LatteDoomClient implements ClientModInitializer {
                     setCull(false);
                     return Command.SINGLE_SUCCESS;
                 })));
-            // /persist [on|off]: experimental path that draws the level from persistent GPU
-            // buffers, baked once, instead of re-emitting every vertex each frame. Off by
-            // default; the toggle allows the two paths to be compared at runtime.
+            // /persist [on|off] — EXPERIMENTAL S2: draw the level from persistent GPU buffers
+            // (bake-once) instead of re-emitting every vertex every frame. Default OFF (the
+            // proven renderer). Toggle it to test the big perf change without risking the game.
             dispatcher.register(ClientCommands.literal("persist")
                 .executes(ctx -> {
                     setPersist(!com.blackwithersteve.lattedoom.render.LatteSectorBuffers.ENABLED);
@@ -792,17 +1366,22 @@ public class LatteDoomClient implements ClientModInitializer {
                     setPersist(false);
                     return Command.SINGLE_SUCCESS;
                 })));
-            // WAD loading, following the conventions other source ports use:
-            //   /load <wad>            set the base WAD
-            //   /pwad <wads...|none>   set the list of patch WADs
-            //   /warp <map>            go to a map, with an optional no-monsters flag
-            // A full game is started from the menu instead: New Game, episode, skill.
+            // Seamless loading — /load alone must be enough:
+            //   /load                  list the folder, classified
+            //   /load <file>           game, patch WAD or .deh — the set assembles itself
+            //   /pwad <wads...|none>   stack extras explicitly (never required)
+            //   /warp <map>            go to a map (e1m1 / map07), optional nomonsters
+            // Starting a game properly = the DOOM menu (M): New Game -> episode -> skill.
             dispatcher.register(ClientCommands.literal("load")
+                .executes(ctx -> {
+                    listWads(ctx.getSource());
+                    return Command.SINGLE_SUCCESS;
+                })
                 .then(ClientCommands.argument("wad",
                         com.mojang.brigadier.arguments.StringArgumentType.greedyString())
                     .suggests(LatteDoomClient::suggestWads)
                     .executes(ctx -> {
-                        setIwad(ctx.getSource(), com.mojang.brigadier.arguments
+                        loadAny(ctx.getSource(), com.mojang.brigadier.arguments
                             .StringArgumentType.getString(ctx, "wad"));
                         return Command.SINGLE_SUCCESS;
                     })));
@@ -829,13 +1408,13 @@ public class LatteDoomClient implements ClientModInitializer {
                             .StringArgumentType.getString(ctx, "map"), true);
                         return Command.SINGLE_SUCCESS;
                     }))));
-            // /doomvolume: DOOM's own audio sliders (0-100), independent of Minecraft's.
+            // /doomvolume — DOOM's OWN audio sliders (0-100), independent of Minecraft's.
             //   /doomvolume                 report current levels
             //   /doomvolume sfx <0-100>     set the DOOM sound-effects level
-            //   /doomvolume music <0-100>   set the music level
+            //   /doomvolume music <0-100>   set the DOOM music level (this is the "louder MIDI" knob)
             dispatcher.register(ClientCommands.literal("doomvolume")
                 .executes(ctx -> {
-                    // With no arguments, open the sound volume menu.
+                    // bare command opens the authentic DOOM Sound Volume menu
                     final Minecraft client = Minecraft.getInstance();
                     client.execute(() -> openVolume(client));
                     return Command.SINGLE_SUCCESS;
@@ -856,14 +1435,38 @@ public class LatteDoomClient implements ClientModInitializer {
                         reportDoomVolume(ctx.getSource());
                         return Command.SINGLE_SUCCESS;
                     }))));
-            // /doomdiag: flush the diagnostic ring buffer to logs/lattedoom-diag.log
+            // /doomgamma — DOOM's gamma correction, 0 (off) to 4; bare cycles like F11 did
+            dispatcher.register(ClientCommands.literal("doomgamma")
+                .executes(ctx -> {
+                    cycleGamma(Minecraft.getInstance());
+                    return Command.SINGLE_SUCCESS;
+                })
+                .then(ClientCommands.argument("level",
+                        com.mojang.brigadier.arguments.IntegerArgumentType.integer(0, 4))
+                    .executes(ctx -> {
+                        setGamma(com.mojang.brigadier.arguments.IntegerArgumentType
+                            .getInteger(ctx, "level"));
+                        return Command.SINGLE_SUCCESS;
+                    })));
+            // /bsp — the experimental BSP-truth mesh (subsectors + segs); next level load
+            dispatcher.register(ClientCommands.literal("bsp").executes(ctx -> {
+                if (config == null) {
+                    config = LatteDoomConfig.load(FabricLoader.getInstance().getConfigDir());
+                }
+                config.bspMesh = !config.bspMesh;
+                config.save();
+                com.blackwithersteve.lattedoom.render.LatteMesh.setBspMode(config.bspMesh);
+                ctx.getSource().sendFeedback(Component.literal("\u00a76bsp mesh:\u00a7f "
+                    + (config.bspMesh ? "on" : "off") + " \u00a77(next level load)\u00a7r"));
+                return Command.SINGLE_SUCCESS;
+            }));
+            // /doomdiag — flush the flight recorder to logs/lattedoom-diag.log right now
             dispatcher.register(ClientCommands.literal("doomdiag").executes(ctx -> {
                 com.blackwithersteve.lattedoom.diag.DoomDiag.dump("manual /doomdiag");
                 return Command.SINGLE_SUCCESS;
             }));
-            // Diagnostic only: shows the raw engine framebuffer. The menu, intermission
-            // and finale are drawn as Minecraft screens, so this is not part of normal
-            // play.
+            // /doomscreen — DEBUG ONLY: the raw engine framebuffer (the old flat screen).
+            // The shell (menu/intermission/finale) is native now; this stays for dev eyes.
             dispatcher.register(ClientCommands.literal("doomscreen").executes(ctx -> {
                 final Minecraft client = Minecraft.getInstance();
                 client.execute(() -> {
@@ -873,67 +1476,47 @@ public class LatteDoomClient implements ClientModInitializer {
                 });
                 return Command.SINGLE_SUCCESS;
             }));
-            // Freezes and unfreezes the engine with no screen open, so the level can be
-            // observed running from within the world, or paused and explored.
+            // /doomwatch — freeze/unfreeze the engine while NO screen is open: stand in the
+            // world and watch the DOOM world run (or pause it to fly around a frozen moment).
             dispatcher.register(ClientCommands.literal("doomwatch").executes(ctx -> {
                 final Minecraft client = Minecraft.getInstance();
                 client.execute(() -> toggleWatch(client));
                 return Command.SINGLE_SUCCESS;
             }));
-            // Transforms the player: DOOM weapons, DOOM pickups and the view weapon. When
-            // off, monsters still pursue the player, who fights with Minecraft's own means.
+            // /doommarine — THE transformation: DOOM weapons, pickups, view gun, marine eye.
+            // Off = plain Steve: monsters still hunt you, but you fight with Minecraft means.
             dispatcher.register(ClientCommands.literal("doommarine").executes(ctx -> {
                 final Minecraft client = Minecraft.getInstance();
                 client.execute(() -> {
-                    // Without game data there is no weapon, no status bar and no sprite to
-                    // draw, so transforming would only remove the vanilla interface and give
-                    // nothing back. Refuse it and say why.
-                    if (needWad(ctx.getSource())) {
+                    // INSIDE a level the command toggles the form — an untransformed
+                    // player on a DOOM map is allowed. The overworld side stays closed:
+                    // no manual transform, no engine booted for suit play (delivery
+                    // transforms, leaving reverts; the rest comes later).
+                    if (!com.blackwithersteve.lattedoom.render.LatteWorld.playMode()) {
+                        ctx.getSource().sendFeedback(Component.literal(
+                            "Marine form is automatic: start a game from the DOOM menu."));
                         return;
                     }
                     final boolean on = !com.blackwithersteve.lattedoom.render.LatteWorld.marineForm();
-                    diagCmd("/doommarine -> " + (on ? "ON" : "OFF"));
                     com.blackwithersteve.lattedoom.render.LatteWorld.setMarineForm(on);
                     if (!on && host != null) {
-                        // Select the fist. The engine keeps running its weapon state machine
-                        // whether or not the player is transformed, and a held chainsaw loops
-                        // its idle sound, which is audible with no weapon on screen.
+                        // Select the fist. The engine keeps running its weapon state
+                        // machine either way, and a held chainsaw loops its idle sound,
+                        // which is audible with no weapon on screen.
                         host.selectWeapon("fist");
                     }
                     if (client.player != null) {
                         client.player.refreshDimensions(); // marine eye height with the form
-                        // Weapons, ammunition and the status bar are engine state, so
-                        // transforming without an engine running starts one. When
-                        // spectating another player's world, that engine boots into the
-                        // same map, so its music matches the world.
-                        if (on && (host == null
-                            || host.state() == DoomHost.State.QUIT
-                            || host.state() == DoomHost.State.CRASHED)) {
-                            // A suit boot supplies the weapon and HUD only, never a level
-                            // session: no warp, no delivery and no music until in a level.
-                            com.blackwithersteve.lattedoom.render.LatteWorld.suitBoot();
-                            // -nomonsters: the suit only needs a level for the weapon and
-                            // the status bar. A populated one leaves monsters awake and
-                            // audible while the player is standing in the overworld, since
-                            // the engine mixes its own sound. Warping in reboots without it.
-                            host = bootHost(client, List.of("-warp",
-                                Integer.toString(suitWarpNumber()),
-                                "-skill", Integer.toString(doomSkill()),
-                                "-nomonsters"));
-                            suitEngine = true;
-                            // The engine boots on its own thread and the status bar cannot
-                            // draw until it publishes its first snapshot, which can take a
-                            // few seconds. Say so, or the wait reads as a broken HUD.
-                            ctx.getSource().sendFeedback(Component.literal(
-                                "§6Latte Doom§r starting the engine, one moment."));
-                        }
                     }
                 });
                 return Command.SINGLE_SUCCESS;
             }));
-            // /lattedoom lists the basic command set. The diagnostic and experimental
-            // commands are registered but left out of that listing, since they exist for
-            // development and are not useful to a player.
+            // /doomstart — convenience teleport to the level's own player-1 start. Being the
+            // marine needs NO command (auto inside the level); the transformation command
+            // (model change etc.) comes later per the plan.
+            // /lattedoom: the basic command set. The diagnostic and experimental commands
+            // are registered but deliberately absent, since they exist for development and
+            // are not useful to a player.
             dispatcher.register(ClientCommands.literal("lattedoom")
                 .executes(ctx -> {
                     help(ctx.getSource(), false);
@@ -1013,7 +1596,6 @@ public class LatteDoomClient implements ClientModInitializer {
                 });
                 return Command.SINGLE_SUCCESS;
             }));
-            // /doomstart: teleport to the level's own player-1 start.
             dispatcher.register(ClientCommands.literal("doomstart").executes(ctx -> {
                 final Minecraft client = Minecraft.getInstance();
                 client.execute(() -> {
@@ -1026,15 +1608,15 @@ public class LatteDoomClient implements ClientModInitializer {
                     }
                     final double[] s = com.blackwithersteve.lattedoom.render.LatteWorld.playerStartWorld();
                     if (s != null && client.player != null) {
-                        // Move the player into the level dimension at its start, from either
-                        // the overworld or the level dimension itself
+                        // pull the player into the level's dimension at its start — works
+                        // whether they're in the overworld or already in the void
                         com.blackwithersteve.lattedoom.render.LatteWorld.enterLevelDim(client, s[0], s[1] + 0.1, s[2]);
                     }
                 });
                 return Command.SINGLE_SUCCESS;
             }));
-            // /doomdemo [1-3]: play one of the IWAD's recorded attract demos (-playdemo),
-            // watchable from inside the world.
+            // /doomdemo [1-3] — play one of the IWAD's recorded attract demos (-playdemo):
+            // the 1993 recorded marine fights through the level, watchable in the world.
             dispatcher.register(ClientCommands.literal("doomdemo")
                 .executes(ctx -> {
                     playDemo(1);
@@ -1049,14 +1631,13 @@ public class LatteDoomClient implements ClientModInitializer {
         });
     }
 
-    /** Reboot the engine into a level, which is raised around the player with no screen
-     * opened. {@code warpNumber} is the engine's -warp argument (episode*10+map, or a bare
-     * MAPxx number). */
+    /** Reboot the engine into a level: it rises around you and RUNS, screen stays closed.
+     * warpNumber is the engine's -warp argument (episode*10+map, or a bare MAPxx number). */
     private static void warp(int warpNumber, boolean nomonsters) {
-        warp(warpNumber, doomSkill(), nomonsters); // at the persisted skill level
+        warp(warpNumber, doomSkill(), nomonsters); // the persisted difficulty governs
     }
 
-    /** The native DOOM menu's New Game: episode + map 1 at the chosen difficulty,
+    /** The native DOOM menu's New Game: episode + map 1 at the CHOSEN difficulty —
      * which persists and governs every later warp/boot until changed. */
     public static void startNewGame(int episode, int skill) {
         if (config != null) {
@@ -1084,9 +1665,9 @@ public class LatteDoomClient implements ClientModInitializer {
                 return;
             }
             if (host != null) {
-                // Wait for the old engine to tear down before booting the next. terminate()
-                // alone is asynchronous, which leaves the previous level's audio playing over
-                // the new engine.
+                // AWAIT the old engine's teardown before booting the next: bare terminate() is
+                // async, so the previous level's audio was still playing when the new engine
+                // started (the previous level's monsters stayed audible).
                 host.terminateAndAwait(1500);
                 host = null;
             }
@@ -1100,14 +1681,14 @@ public class LatteDoomClient implements ClientModInitializer {
             }
             host = bootHost(client, extra);
             suitEngine = false;
-            // Loading while spectating another player's level takes ownership of it: the
-            // most recent loader's engine becomes the world for everyone
+            // loading while spectating someone else's level = taking over: last loader's
+            // engine becomes THE world for everyone (id's co-op spirit)
             com.blackwithersteve.lattedoom.render.LatteWorld.claimWorld();
             com.blackwithersteve.lattedoom.render.LatteWorld.requestStartTeleport();
         });
     }
 
-    /** Reboot with -playdemo demoN. The engine quits when the demo ends. */
+    /** Reboot with -playdemo demoN: the recorded marine plays; the engine quits when it ends. */
     private static void playDemo(int number) {
         final Minecraft client = Minecraft.getInstance();
         client.execute(() -> {
@@ -1122,7 +1703,7 @@ public class LatteDoomClient implements ClientModInitializer {
         });
     }
 
-    /** Toggle the engine's freeze while no screen is open. */
+    /** Toggle the engine's freeze while no screen is open (live spectate vs frozen diorama). */
     private static void toggleWatch(Minecraft client) {
         if (host == null || host.state() != DoomHost.State.RUNNING) {
             if (config == null) {
@@ -1134,16 +1715,17 @@ public class LatteDoomClient implements ClientModInitializer {
         host.setFrozen(!host.isFrozen());
     }
 
-    /** Whether this key event matches the rebindable menu key. Screens use it to close
-     * themselves independently of layout, since grave is a dead key on some of them. */
+    /** Does this key event match the (rebindable) DOOM boot/menu key? Screens use it as
+     * their layout-safe close toggle (grave is a dead key on German QWERTZ). */
     public static boolean isBootKey(net.minecraft.client.input.KeyEvent event) {
         return bootKey != null && bootKey.matches(event);
     }
 
-    /** Opens the DOOM menu, drawn as a Minecraft screen from the WAD's own art; the
-     * engine's framebuffer is never shown. Outside a level the title screen backs the
-     * menu, and inside one the world is dimmed behind it. Choosing New Game, an episode
-     * and a skill raises that level around the player. */
+    /** Open the DOOM MENU — the NATIVE one, rendered in Minecraft from the WAD's own art.
+     * The engine
+     * framebuffer never appears: outside a level the TITLEPIC backs the menu, inside the
+     * world dims behind it; New Game -> episode -> skill materializes the level around
+     * you. (The raw framebuffer screen survives only as /doomscreen for debugging.) */
     public static void openDoom(Minecraft client) {
         if (client.gui.screen() instanceof LatteMenuScreen) {
             return;
@@ -1151,12 +1733,12 @@ public class LatteDoomClient implements ClientModInitializer {
         if (config == null) {
             config = LatteDoomConfig.load(FabricLoader.getInstance().getConfigDir());
         }
-        // Menu art from the player's own WAD, loadable even before any level stood
+        // menu art from the player's own WAD, loadable even before any level stood
         com.blackwithersteve.lattedoom.render.LatteWorld.ensureUiAssets(client, config.iwadPath);
         client.gui.setScreen(new LatteMenuScreen());
     }
 
-    /** The warp number for a supporting engine: the shared map when spectating one
+    /** The -warp number for a suit engine: the shared map if we're spectating one
      * (e1m2 -> 12, map05 -> 5), else E1M1. */
     private static int suitWarpNumber() {
         final String rm = com.blackwithersteve.lattedoom.render.LatteWorld.remoteMapName();
@@ -1179,7 +1761,7 @@ public class LatteDoomClient implements ClientModInitializer {
         final Minecraft c = Minecraft.getInstance();
         if (c.player != null) {
             c.player.sendSystemMessage(Component.literal(
-                "§6Latte Doom§r: frustum culling " + (on ? "§aON§r" : "§7OFF§r")));
+                "§6Latte Doom§r frustum culling " + (on ? "§aON§r" : "§7OFF§r")));
         }
     }
 
@@ -1192,15 +1774,19 @@ public class LatteDoomClient implements ClientModInitializer {
             }
             if (c.player != null) {
                 c.player.sendSystemMessage(Component.literal(
-                    "§6Latte Doom§r: persistent geometry "
+                    "§6Latte Doom§r persistent geometry "
                     + (on ? "§aON§r §7(experimental)§r" : "§7OFF§r")));
             }
         });
     }
 
     private static DoomHost bootHost(Minecraft client, List<String> extraArgs) {
+        return bootHost(client, extraArgs, -1);
+    }
+
+    private static DoomHost bootHost(Minecraft client, List<String> extraArgs, int loadSlot) {
         if (config.iwadPath == null) {
-            // The WAD may have been added after launch: one fresh scan before failing
+            // maybe the WAD was dropped in AFTER launch — one fresh scan before failing
             config = LatteDoomConfig.load(FabricLoader.getInstance().getConfigDir());
             com.blackwithersteve.lattedoom.render.LatteWorld.setPwads(config.pwads);
         }
@@ -1208,17 +1794,17 @@ public class LatteDoomClient implements ClientModInitializer {
             LOGGER.warn("No IWAD found in {}", config.dataDir);
             if (client.player != null) {
                 client.player.sendSystemMessage(Component.literal(
-                    "§cLatte Doom has no game data.§r It is a source port, so the levels,"
-                    + " textures and sounds come from a DOOM or DOOM II WAD and none of it"
-                    + " ships with the mod. Put §eDOOM.WAD§r or §eDOOM2.WAD§r in §e"
-                    + config.dataDir + "§r and try again."));
+                    "§cLatte Doom has no game data.§r It is a source port, so the actual"
+                    + " levels, textures and sounds live in a DOOM or DOOM II WAD, which this"
+                    + " mod does not include. Put your own §eDOOM.WAD§r or §eDOOM2.WAD§r in "
+                    + config.dataDir + " and try again."));
             }
             return null;
         }
         LOGGER.info("Booting DOOM: iwad={}, data={}, pwads={}, extra={}",
             config.iwadPath, config.dataDir, config.pwads, extraArgs);
         final List<String> extra = new ArrayList<>(extraArgs);
-        // Custom WADs (SIGIL, map packs) layered on top of the IWAD via -file, exactly
+        // custom WADs (SIGIL, map packs) layered on top of the IWAD via -file, exactly
         // as the engine expects. The client mirrors the same set (LatteWorld.setPwads).
         if (!config.pwads.isEmpty()) {
             extra.add("-file");
@@ -1226,6 +1812,13 @@ public class LatteDoomClient implements ClientModInitializer {
                 extra.add(p.toAbsolutePath().toString());
             }
         }
+        // Standalone .deh/.bex patch files, applied after the WAD set's embedded lumps.
+        // Set on every boot: a boot without patches must clear the previous boot's list.
+        final java.util.List<String> dehFiles = new ArrayList<>();
+        for (java.nio.file.Path p : config.dehs) {
+            dehFiles.add(p.toAbsolutePath().toString());
+        }
+        mochadoom.Engine.DEH_FILES = List.copyOf(dehFiles);
         // The engine offers several sound drivers, which differ in how they reach the audio
         // device. Its default is a software mixer; the others are selectable here so a
         // latency problem can be attributed without rebuilding.
@@ -1237,15 +1830,15 @@ public class LatteDoomClient implements ClientModInitializer {
             default -> { } // "super": the engine's own default, no flag
         }
         if (config.novert) {
-            // "-novert" on its own only prints a message. The "disable" argument is what
-            // stops vertical mouse movement from walking the player forward and back.
+            // Quirky cvar: plain "-novert" only prints a message; the literal
+            // argument "disable" is what actually stops mouse-Y from walking you.
             extra.add("-novert");
             extra.add("disable");
         }
-        // The quit and crash callbacks fire asynchronously. After a /doomwarp reboot the old
-        // engine's shutdown arrives late and must not clear the new engine's hookup, which
-        // would tear the incoming level down immediately after it appeared. Each callback
-        // therefore acts only while the shared host is still the one it was created for.
+        // The quit/crash callbacks fire ASYNC — after a /doomwarp reboot, the OLD engine's
+        // shutdown lands a beat later and must NOT null the NEW engine's hookup (that was
+        // "the level appears then vanishes a split second later"). Each callback only acts
+        // if the shared host still IS the host it was created for.
         com.blackwithersteve.lattedoom.diag.DoomDiag.logNow("engine", "boot " + extra
             + " iwad=" + (config.iwadPath != null ? config.iwadPath.getFileName() : "none")
             + " pwads=" + config.pwads.size());
@@ -1278,7 +1871,102 @@ public class LatteDoomClient implements ClientModInitializer {
                     client.player.sendSystemMessage(
                         Component.literal("§cLatte Doom crashed:§r " + t));
                 }
-            }));
+            }),
+            saveSetKey(), loadSlot);
         return self[0];
+    }
+
+    // ---- savegames: per WAD set, the way the GZDoom family keys them ----
+
+    /** Names the save folder for the CURRENT selection: iwad+pwads+dehs in load
+     * order. A save belongs to the exact combination that made it — saving in DOOM
+     * and loading it under DOOM II is structurally impossible. */
+    public static String saveSetKey() {
+        if (config == null || config.iwadPath == null) {
+            return "default";
+        }
+        final StringBuilder k = new StringBuilder(
+            config.iwadPath.getFileName().toString().toLowerCase(java.util.Locale.ROOT));
+        for (java.nio.file.Path p : config.pwads) {
+            k.append('+').append(p.getFileName().toString().toLowerCase(java.util.Locale.ROOT));
+        }
+        for (java.nio.file.Path p : config.dehs) {
+            k.append('+').append(p.getFileName().toString().toLowerCase(java.util.Locale.ROOT));
+        }
+        return k.toString().replaceAll("[^a-z0-9+._-]", "_");
+    }
+
+    private static java.nio.file.Path saveDir() {
+        return config.dataDir.resolve("saves").resolve(saveSetKey());
+    }
+
+    /** The six slot descriptions for the current WAD set, null where no save exists.
+     * Read straight off the .dsg headers (first 24 bytes), engine running or not. */
+    public static String[] saveSlots() {
+        final String[] out = new String[6];
+        final java.nio.file.Path dir = saveDir();
+        for (int i = 0; i < 6; i++) {
+            final java.nio.file.Path f = dir.resolve("doomsav" + i + ".dsg");
+            try {
+                if (java.nio.file.Files.exists(f)) {
+                    final byte[] head = new byte[24];
+                    try (var in = java.nio.file.Files.newInputStream(f)) {
+                        final int n = in.read(head);
+                        final StringBuilder s = new StringBuilder();
+                        for (int j = 0; j < n && head[j] != 0; j++) {
+                            final char c = (char) (head[j] & 0xFF);
+                            s.append(c >= 32 && c < 127 ? c : ' ');
+                        }
+                        out[i] = s.toString().trim();
+                        if (out[i].isEmpty()) {
+                            out[i] = "SLOT " + (i + 1);
+                        }
+                    }
+                }
+            } catch (java.io.IOException ignored) {
+            }
+        }
+        return out;
+    }
+
+    /** Whether the engine is standing in a level — the vanilla save condition. */
+    public static boolean canSave() {
+        return host != null && host.state() == DoomHost.State.RUNNING
+            && host.gamestateKind() == 0;
+    }
+
+    /** Menu Save: the engine must be standing in a level. The write happens on the
+     * engine's next unfrozen tic (the menu closes right after, which unfreezes). */
+    public static boolean saveGame(int slot) {
+        if (!canSave()) {
+            return false;
+        }
+        host.requestSave(slot, saveDescription());
+        return true;
+    }
+
+    /** 24 chars max (the vanilla header field): level + date, GZDoom-style auto-name. */
+    private static String saveDescription() {
+        String map = com.blackwithersteve.lattedoom.render.LatteWorld.mapName();
+        map = map == null ? "SAVE" : map.toUpperCase(java.util.Locale.ROOT);
+        final java.time.LocalDateTime t = java.time.LocalDateTime.now();
+        return String.format("%s  %02d-%02d %02d:%02d", map,
+            t.getMonthValue(), t.getDayOfMonth(), t.getHour(), t.getMinute());
+    }
+
+    /** Menu Load: engine running gets an in-place G_LoadGame; a cold menu boots the
+     * engine straight into the save. Either way the player is delivered onto the
+     * loaded level the way a death restart re-delivers. */
+    public static boolean loadGame(int slot) {
+        if (!java.nio.file.Files.exists(saveDir().resolve("doomsav" + slot + ".dsg"))) {
+            return false;
+        }
+        com.blackwithersteve.lattedoom.render.LatteWorld.requestLoadDelivery();
+        if (host != null && host.state() == DoomHost.State.RUNNING) {
+            host.requestLoad(slot);
+        } else {
+            host = bootHost(Minecraft.getInstance(), List.of(), slot);
+        }
+        return true;
     }
 }

@@ -3,5 +3,6 @@
   "key.lattedoom.use": "DOOM Use",
   "key.lattedoom.volume": "DOOM Sound Volume menu",
   "key.lattedoom.automap": "DOOM automap",
+  "key.lattedoom.gamma": "DOOM gamma correction",
   "key.categories.lattedoom": "Latte Doom"
 }

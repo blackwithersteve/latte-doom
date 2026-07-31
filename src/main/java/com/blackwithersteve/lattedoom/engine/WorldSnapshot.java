@@ -1,5 +1,6 @@
 package com.blackwithersteve.lattedoom.engine;
 
+import p.ActiveStates;
 import defines.gamestate_t;
 import doom.DoomMain;
 import doom.player_t;
@@ -11,13 +12,14 @@ import p.pusher_t;
 import rr.sector_t;
 
 /**
- * Copy of the engine's world state, taken on the engine thread between tics so nothing is
- * captured mid-update. The only view of the engine the Minecraft side reads. Everything is
- * copied into primitives, so no engine object escapes the engine thread and a snapshot can
- * be held for as long as needed.
+ * One consistent copy of the engine's world state, taken ON THE ENGINE THREAD at a page
+ * flip (the frame boundary — between tics, so nothing is mid-mutation). This is the ONLY
+ * thing the Minecraft renderer reads: sector heights drive the level mesh, mobjs drive
+ * billboards, the player drives the camera. Plain data, no MC and no engine references
+ * escape (everything is copied to primitives), so the render thread can hold it freely.
  *
- * <p>Units are map units as doubles (fixed_t / 65536); angles are degrees, counter-clockwise
- * positive.
+ * <p>Units: DOOM map units as doubles (fixed_t / 65536). Angles in degrees CCW-positive
+ * (DOOM convention, angle_t * 360 / 2^32).
  */
 public final class WorldSnapshot {
 
@@ -25,53 +27,53 @@ public final class WorldSnapshot {
     public int tic;
     public int episode;
     public int map;
-    /** True while the engine plays back a recorded demo, during which the player must not
-     * be mirrored into it. */
+    /** True while the engine plays back a recorded demo — auto-possession must not stomp it. */
     public boolean demo;
 
-    // ---- The local player. ----
+    // ---- the player (players[0]) ----
     public double px, py, pz;
-    /** Eye height above the map origin ({@code viewz}), not above the floor. */
+    /** Eye height above the map origin (viewz), NOT above the floor. */
     public double viewZ;
     public double angleDeg;
 
-    // ---- Sectors, as parallel arrays indexed by sector number. ----
+    // ---- sectors: parallel arrays, index = sector number ----
     public double[] floorH;
     public double[] ceilH;
     public short[] light;
     public short[] floorPic;
     public short[] ceilPic;
 
-    // ---- Automap state: which lines the player has seen, and whether the computer area
-    // map power-up is active, which reveals the remainder. ----
+    // ---- automap truth: which lines the ENGINE's own renderer has seen (ML_MAPPED),
+    // and whether the Computer Area Map power is running (reveals the rest in gray) ----
     public boolean[] lineMapped;
     public boolean allmap;
 
-    /** Lines whose front side textures differ from the level's baseline: pressed
-     * switches and anything else that edits sidedefs. The rendering side swaps the texture
-     * names and rebuilds those walls. Null for snapshots received over the network. */
+    /** Lines whose FRONT side textures differ from the level's baseline — pressed
+     * switches (SW1->SW2) and anything else that edits sidedefs. The client swaps the
+     * texture names and re-bakes those walls. Null on the spectator wire (local only). */
     public int[] switchedLines;
 
-    // ---- Boom friction and pushers, consumed by the movement integrator. These are local
-    // only: the network codec does not carry them, so spectators use the standard
-    // constants. Null arrays mean the level defines none, and the constant path applies. ----
-    /** Per-tic friction factor per sector. Standard floors hold exactly 0.90625; a friction
-     * line's value applies only while the sector special carries the friction bit. */
+    // ---- Boom friction + pushers, the DoomMovement mirror lane (all LOCAL-only: the
+    // network codec does not carry them, so spectators keep the vanilla constants).
+    // Null arrays = the level has none = the client's untouched constant path. ----
+    /** EFFECTIVE per-tic friction FACTOR per sector (vanilla floors hold exactly
+     * 0.90625): the 223-line value only while the sector special carries the
+     * FRICTION_MASK bit, else the vanilla constant. */
     public double[] secFriction;
-    /** Effective Boom movefactor per sector (2048 = vanilla thrust scale). */
+    /** EFFECTIVE Boom movefactor per sector (2048 = vanilla thrust scale). */
     public int[] secMoveFactor;
-    /** Total pusher force (wind 224 + current 225 + point 226) the engine's T_Pusher
-     * would add to a player object at the local player's position this tic, in map units
-     * per tic of momentum. Computed with the engine's own integer arithmetic, including
-     * distance falloff, the sight check, the push-enable bit, and the distinction between
-     * a grounded and an airborne player. Exactly zero when the level defines no pushers. */
+    /** TOTAL pusher force (wind 224 + current 225 + point 226) the engine's T_Pusher
+     * would add to a player mobj at the LOCAL player's position this tic, map units/tic
+     * of momentum. Computed with the engine's own integer math (falloff, sight check,
+     * PUSH_MASK gate, grounded/airborne split at the mirrored position). Exactly 0.0
+     * when the level has no pushers — the client's untouched path. */
     public double playerPushX, playerPushY;
 
-    // ---- Map objects: monsters, items, projectiles, decorations and the player. ----
+    // ---- mobjs (monsters, items, projectiles, decorations, AND the player) ----
     public int mobjCount;
     public double[] mx, my, mz;
     public double[] mAngleDeg;
-    /** Spritenum_t ordinal. */
+    /** spritenum_t ordinal. */
     public int[] mSprite;
     /** Frame index; bit 0x8000 (FF_FULLBRIGHT) preserved. */
     public int[] mFrame;
@@ -79,57 +81,69 @@ public final class WorldSnapshot {
     public int[] mId;
     /** MF_SOLID things block the walking player (barrels, pillars, live monsters). */
     public boolean[] mSolid;
-    /** MF_SHOOTABLE: what Minecraft fists/swords/arrows may damage (monsters, barrels;
-     * corpses and decorations do not carry the flag). */
+    /** MF_SHOOTABLE — what Minecraft fists/swords/arrows may damage (monsters, barrels;
+     * corpses and decorations drop the flag). */
     public boolean[] mShootable;
     /** Collision radius, map units (the blockmap box rule uses radius sums). */
     public double[] mRadius;
 
-    // ---- The view weapon and its muzzle flash. ----
+    // ---- the player's view weapon (psprites[0]) + muzzle flash (psprites[1]) ----
     /** spritenum ordinal (-1 = none), frame (FF_FULLBRIGHT kept), sx/sy in 320x200 pixels. */
     public int wSprite = -1, wFrame, wX, wY;
     public int fSprite = -1, fFrame, fX, fY;
 
-    // ---- Player statistics, as drawn on the status bar. ----
+    // ---- marine stats for the 1:1 status bar ----
     public int armor, readyWeapon = -1, readyAmmoType = -1, damageCount, bonusCount;
+    /** Kills/items/secrets, the player's count and the level's total, plus the level's
+     * elapsed tics — the stats widget's feed. */
+    public int killCount, totalKills, itemCount, totalItems, secretCount, totalSecrets,
+        levelTime;
+    /** The engine's heads-up line (pickups, keys, secrets), consumed on capture the way
+     * HU_Ticker consumes it; null when nothing new was said this tic. */
+    public String message;
+    /** Whether the view weapon is in its ready state — the only state vanilla bobs in;
+     * firing freezes the sway where it was. */
+    public boolean weaponReady;
+    /** 1 = green armor, 2 = blue, matches player_t.armortype. */
+    public int armorType;
     public int[] ammo, maxAmmo;      // the 4 pools (clip, shell, cell, missile order)
     public boolean[] weaponOwned;    // 9 weapons
     public boolean[] cards;          // 6 keys (3 cards + 3 skulls)
-    /** Index of the player's own mobj in the arrays (-1 if absent): spectating renders it;
-     * hidden when it represents the local player. */
+    /** Index of the player's own mobj in the arrays (-1 if absent) — spectating renders it;
+     * M3 (you ARE the marine) will hide it. */
     public int playerMobj = -1;
 
-    /** True when this snapshot arrived over the network (someone else's engine): the
-     * sending player's own object is skipped when drawing sprites, because their avatar
-     * already occupies that position. */
+    /** True when this snapshot arrived over the NETWORK (someone else's engine): the
+     * owner's player mobj is skipped in the sprite pass (their MC body already shows). */
     public boolean remote;
 
-    // ---- Player-mirroring state; local only, never sent over the network. ----
-    /** Identity of the level instance this snapshot came from; changes on every load,
-     * including a restart of the same map. The client echoes it back with its mirrored
-     * position and stale-stamped positions are rejected, so a fresh spawn is never
-     * overwritten by the player's previous position read through the new map's origin. */
+    // ---- possession sync (LOCAL-only, never on the wire) ----
+    /** Identity of the LEVEL INSTANCE this snapshot came from — changes on every level
+     * load, including a death-restart of the same map. The client echoes it with its
+     * mirror input and the host refuses mirror positions stamped with a stale epoch:
+     * without this, the per-frame mirror write instantly clobbered every fresh engine
+     * spawn with the player's old standing spot converted through the NEW map's anchors
+     * (the "spawned in the wrong spot of the level" reports — death restarts AND the
+     * SIGIL E5M1→E5M2 advance). */
     public long levelEpoch;
     /** Running count of real engine-side teleports of the local player (see
-     * {@code Engine.PLAYER_TELEPORT_COUNT}); the client moves the Minecraft player to
-     * match whenever it changes. */
+     * Engine.PLAYER_TELEPORT_COUNT) — the client snaps the MC player when it changes. */
     public int teleportCount;
 
-    /** The map's sky texture name, as chosen by the engine for this episode and map,
-     * including any replacement supplied by a patch WAD. The renderer draws it behind the
-     * sky openings in the mesh. Local only. */
+    /** The map's sky TEXTURE name ("SKY1", or whatever the PWAD swapped in) — engine
+     * truth from G_DoLoadLevel's episode/map selection. The client draws it behind the
+     * F_SKY1 holes in the mesh. LOCAL-only. */
     public String skyTexture;
 
     /** Remote player bodies living in this engine: player UUID halves ↔ the mId of
-     * their mirrored object, as parallel arrays, or null when there are none. A spectating
-     * client finds its own body here, which is how it follows teleporters, and skips
-     * drawing it because its avatar already stands there. */
+     * their possessed mobj (parallel arrays, null when none). A spectating client finds
+     * its own body here (teleporter follows) and skips rendering it (their MC body
+     * already stands there). */
     public long[] rbUuidMost, rbUuidLeast;
     public int[] rbMobjId;
 
-    /** An empty instance for the network decoder to fill. Only world fields are carried;
-     * player statistics stay zero, because a spectator's HUD always reads its own engine
-     * rather than the network. */
+    /** Empty shell for the network decoder to fill (world fields only; suit stats stay 0
+     * — a spectator's HUD reads their OWN engine, never the wire). */
     public static WorldSnapshot forRemote() {
         final WorldSnapshot s = new WorldSnapshot();
         s.remote = true;
@@ -140,23 +154,22 @@ public final class WorldSnapshot {
     private static final double ANG_TO_DEG = 360.0 / 4294967296.0;
 
     /**
-     * Captures the current engine state. Must be called on the engine thread at a frame
-     * boundary. Returns null while no level is running, such as on the title screen or
-     * during the intermission or finale.
+     * Capture the live engine state. Call ONLY on the engine thread at a frame boundary.
+     * Returns null while no level is running (title screen, intermission, finale).
      */
     private static int baselineKey = Integer.MIN_VALUE;
     private static short[] sideBase;
     private static int[] sideToLine;
     private static final int[] EMPTY_INTS = new int[0];
 
-    // Level-instance epoch: a fresh timestamp whenever the episode, map or level start tic
-    // changes. This state outlives an engine restart within the same JVM, and a restarted
-    // engine can reproduce the same key because its tic counter starts near zero, so
-    // newBoot() forces a fresh epoch and a stale mirror cannot be accepted across a restart.
+    // level-instance epoch: a fresh nanoTime whenever the (episode, map, levelstarttic)
+    // key changes. Static state survives an engine reboot in the same JVM, and a rebooted
+    // engine can reproduce the same key (gametic restarts near 0) — newBoot() forces a
+    // fresh epoch so a stale mirror can never be accepted across a /warp reboot either.
     private static int epochKey = Integer.MIN_VALUE;
     private static long epochValue;
 
-    /** Call when a new engine boots (DoomHost): the first capture mints a fresh epoch. */
+    /** Call when a NEW engine boots (DoomHost): the first capture mints a fresh epoch. */
     public static void newBoot() {
         epochKey = Integer.MIN_VALUE;
     }
@@ -186,6 +199,19 @@ public final class WorldSnapshot {
         s.viewZ = p.viewz / FRAC;
         s.angleDeg = (p.mo.angle & 0xFFFFFFFFL) * ANG_TO_DEG;
         s.armor = p.armorpoints[0];
+        s.armorType = p.armortype;
+        // read-and-clear, exactly HU_Ticker's contract, so a line shows once
+        if (p.message != null) {
+            s.message = p.message;
+            p.message = null;
+        }
+        s.killCount = p.killcount;
+        s.itemCount = p.itemcount;
+        s.secretCount = p.secretcount;
+        s.totalKills = d.totalkills;
+        s.totalItems = d.totalitems;
+        s.totalSecrets = d.totalsecret;
+        s.levelTime = d.leveltime;
         s.damageCount = p.damagecount;
         s.bonusCount = p.bonuscount;
         if (p.readyweapon != null) {
@@ -212,6 +238,7 @@ public final class WorldSnapshot {
                 && p.psprites[0].state.sprite != null) {
                 s.wSprite = p.psprites[0].state.sprite.ordinal();
                 s.wFrame = p.psprites[0].state.frame;
+                s.weaponReady = p.psprites[0].state.action == ActiveStates.A_WeaponReady;
                 s.wX = p.psprites[0].sx >> 16;
                 s.wY = p.psprites[0].sy >> 16;
             }
@@ -239,10 +266,10 @@ public final class WorldSnapshot {
             s.ceilPic[i] = sec.ceilingpic;
         }
 
-        // ---- Boom friction: the effective per-sector values for the movement integrator.
-        // The arrays exist only when the level defines friction, since that assignment is
-        // fixed after spawn, so maps without it take the null path. The friction-enable bit
-        // is re-read every tic, exactly as the engine re-reads it. ----
+        // ---- Boom friction (223): per-sector EFFECTIVE values for the DoomMovement
+        // marine integrator. Arrays exist only when some 223 line touched this level
+        // (boomFriction is spawn-static), so vanilla maps take the null fast path; the
+        // FRICTION_MASK on/off bit is re-read per tic like the engine's own gate.
         boolean anyFriction = false;
         for (int i = 0; i < n && !anyFriction; i++) {
             anyFriction = sectors[i].boomFriction != sector_t.ORIG_FRICTION;
@@ -263,15 +290,14 @@ public final class WorldSnapshot {
             }
         }
 
-        // ---- Boom pushers: the exact per-tic force the engine's pusher thinker would
-        // apply to a player object at the mirrored player's position, computed in the
-        // engine's integer arithmetic throughout and converted once at the end. The engine
-        // applies this to the mirrored object as well, but mirroring zeroes its momentum
-        // every frame, so applying it on the Minecraft side is the only delivery and there
-        // is no double push. Following the engine thinker's own simplifications, wind and
-        // current are gated on the sector containing the player's centre, and the grounded
-        // test compares against this sector's floor, because the mirrored object's own floor
-        // height is never refreshed by the engine's movement code. ----
+        // ---- Boom pushers (224-226): T_Pusher's exact per-tic force for a player mobj
+        // at the mirrored player's position, engine integer math end to end (the double
+        // conversion happens once, on the final sum). The engine's own T_BoomPusher does
+        // hit players[0].mo too, but the possession mirror zeroes momx/momy every frame,
+        // so the client applying this is the ONLY delivery — no double push.
+        // v1 (matches the engine thinker's own simplifications): center-in-sector gates
+        // wind/current, and the grounded test is z <= this sector's floor — the mirrored
+        // mobj's floorz is never refreshed by P_TryMove, so it cannot be trusted here.
         {
             int pushX = 0, pushY = 0; // fixed_t momentum add
             final mobj_t pmo = p.mo;
@@ -288,8 +314,7 @@ public final class WorldSnapshot {
                         continue;
                     }
                     if (pu.type == pusher_t.PT_POINT) {
-                        // PIT_PushThing: linear falloff to zero at twice the magnitude,
-                        // plus a line-of-sight check.
+                        // PIT_PushThing: linear falloff to zero at 2 x magnitude + sight
                         final int dist = MapUtils.AproxDistance(pmo.x - pu.x, pmo.y - pu.y);
                         final int speed = (pu.magnitude - ((dist >> 16) >> 1))
                             << (16 - ActionsBoom.PUSH_FACTOR - 1);
@@ -322,10 +347,10 @@ public final class WorldSnapshot {
             s.playerPushY = pushY / FRAC;
         }
 
-        // Switch textures: compare the sidedefs' texture numbers against the baseline
-        // captured when the level loaded, so that both a press and the revert of a
-        // reusable switch fall out of the same comparison. Engine thread only; the
-        // baseline is re-seeded per level instance, which covers restarting the same map.
+        // Switch textures: pressed buttons must visibly change — diff the sides' texture
+        // numbers against the level baseline — presses AND reusable-button reverts both
+        // fall out of the diff automatically. Engine thread only; baseline re-seeds per
+        // level instance (levelstarttic covers death-restarts of the same map).
         final int levelKey = (d.gameepisode << 24) ^ (d.gamemap << 16) ^ d.levelstarttic;
         if (levelKey != epochKey) {
             epochKey = levelKey;
@@ -380,8 +405,8 @@ public final class WorldSnapshot {
             }
         }
 
-        // Automap: the engine marks the lines the player has seen, which is the
-        // original's reveal rule; the area map power-up shows the remainder in grey.
+        // automap: the engine's own renderer marks lines it has drawn (ML_MAPPED) — the
+        // vanilla reveal rule; the allmap power shows the rest in gray
         final rr.line_t[] lines = d.levelLoader.lines;
         if (lines != null) {
             s.lineMapped = new boolean[lines.length];
@@ -392,15 +417,12 @@ public final class WorldSnapshot {
         s.allmap = p.powers != null && p.powers.length > data.Defines.pw_allmap
             && p.powers[data.Defines.pw_allmap] > 0;
 
-        // Walk the thinker list twice, once to count and once to fill, which sizes the
-        // arrays exactly and avoids intermediate collections.
-        //
-        // Objects flagged MF_NOSECTOR are invisible markers rather than world objects. The
-        // engine's renderer walks per-sector object lists, which they are never linked
-        // into, so it cannot draw them at all. Teleport destinations are the common case:
-        // they carry a null state whose sprite slot is a real monster sprite, so walking the
-        // thinker list without this filter draws a motionless, non-solid monster on every
-        // teleporter pad.
+        // Walk the thinker ring once to count, once to fill — allocation-exact, no lists.
+        // MF_NOSECTOR things are invisible MARKERS, not world objects: vanilla's renderer
+        // walks sector thing lists, which they are never linked into, so it literally
+        // cannot draw them. MT_TELEPORTMAN wears S_NULL whose sprite slot is TROO — we
+        // walked the raw thinker ring and drew every teleport destination as a frozen
+        // walk-through imp standing on its pad (the SIGIL/Eviternity "ghost imps").
         final thinker_t cap = d.actions.getThinkerCap();
         int count = 0;
         for (thinker_t t = cap.next; t != cap; t = t.next) {
@@ -431,8 +453,7 @@ public final class WorldSnapshot {
                 s.my[i] = m.y / FRAC;
                 s.mz[i] = m.z / FRAC;
                 s.mAngleDeg[i] = (m.angle & 0xFFFFFFFFL) * ANG_TO_DEG;
-                // Prefer the true sprite index: sprites added by MBF-class patches have
-                // no entry in the built-in enumeration.
+                // DEH support: prefer the true sprite index (MBF sprites 138+ have no enum)
                 s.mSprite[i] = m.mobj_spritenum >= 0 ? m.mobj_spritenum : m.mobj_sprite.ordinal();
                 s.mFrame[i] = m.mobj_frame;
                 s.mId[i] = System.identityHashCode(m); // stable for the mobj's lifetime

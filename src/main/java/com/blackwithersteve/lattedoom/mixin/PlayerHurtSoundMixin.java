@@ -10,10 +10,9 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
- * A transformed player's pain sound comes from the engine's own {@code A_Pain} action, so
- * the vanilla hurt sound is suppressed for players on the roster; playing both produces a
- * doubled hurt sound. Untransformed players keep the Minecraft sound, and the engine
- * stays silent for them, decided per player.
+ * A marine grunts in doomguy's voice (the engine's A_Pain) — the Minecraft "oof" on top
+ * of it was a double hurt sound. Rostered marines get no vanilla hurt sound; plain
+ * players keep theirs (and the engine keeps ITS mouth shut for them, per-player).
  */
 @Mixin(Player.class)
 public abstract class PlayerHurtSoundMixin {

@@ -9,18 +9,14 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Redirect;
 
 /**
- * Death inside a level follows DOOM's rules rather than Minecraft's: there is no death
- * message and no scattered inventory, only the level restart described in
- * {@code docs/ARCHITECTURE.md}. {@code ServerPlayer.die} consults exactly two game rules,
- * which are answered locally for players on the marine roster while the world's own
- * settings stay untouched for everyone else:
- * <ul>
- *   <li>{@code SHOW_DEATH_MESSAGES} returns false, so no chat broadcast or death-screen
- *       text competes with the DOOM death sequence.</li>
- *   <li>{@code KEEP_INVENTORY} returns true, so a player's Minecraft items are not
- *       dropped into the level's void dimension; the DOOM arsenal is engine state and
- *       unaffected either way.</li>
- * </ul>
+ * A DOOM death is the ENGINE's business, not Minecraft's: no chat message — the DOOM
+ * death sequence plays and the player simply respawns.
+ * ServerPlayer.die consults exactly two game rules; for players on the marine roster we
+ * answer them the DOOM way, world settings untouched for everyone else:
+ *  - SHOW_DEATH_MESSAGES -> false: no chat broadcast, no death-screen text — the death is
+ *    handled by the DOOM flow (map restarts, reborn at the start).
+ *  - KEEP_INVENTORY -> true: the marine's Minecraft belongings must NOT scatter into the
+ *    level's void dimension (the arsenal is suit state, the rest is his overworld kit).
  */
 @Mixin(ServerPlayer.class)
 public abstract class MarineDeathMixin {

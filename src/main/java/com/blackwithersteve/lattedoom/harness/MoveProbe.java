@@ -8,20 +8,15 @@ import java.nio.file.Path;
 import java.util.List;
 
 /**
- * Collision gate: from every map's player-1 start, runs 120 tics in each of eight directions
- * at running speed. A map passes only if, every tic, the player stays inside a real sector,
- * grounded feet sit on the floor, no climb exceeds {@link DoomCollision#STEP_UP} and all
- * coordinates stay finite.
- *
- * <p>{@code ./gradlew moveProbe -Pwad=/path/to/DOOM.WAD [-Pmap=E1M1]}
+ * Headless gate for the player collision port: from every map's P1 start, sprint 120 tics
+ * in each of 8 directions at run momentum. PASS requires, on every single tic: the marine
+ * stays in a real sector (never the void behind a one-sided wall), grounded feet sit
+ * exactly on the aggregate floor, no single-tic climb exceeds STEP_UP, and coordinates
+ * stay finite. Fresh verification — no inherited claims.
  */
 public final class MoveProbe {
 
     public static void main(String[] args) throws Exception {
-        if (args.length == 0 || args[0].isEmpty()) {
-            System.err.println("MoveProbe: pass a WAD path (gradle: -Pwad=/path/to/DOOM.WAD)");
-            System.exit(2);
-        }
         final WadFile wad = WadFile.read(Path.of(args[0]));
         final List<String> maps = args.length > 1 && !args[1].isEmpty()
             ? List.of(args[1]) : wad.mapNames();

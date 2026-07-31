@@ -6,22 +6,19 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * Animated textures and flats, resolved when a texture is bound for rendering and
- * following the engine's {@code P_UpdateSpecials}: sequences advance every 8 tics, and
- * each member of a sequence is phase-offset by its own index, so a floor mixing
- * {@code NUKAGE1} and {@code NUKAGE2} stays out of step exactly as it does in DOOM.
- *
- * <p>The animation definitions are the engine's own table. Sequences are resolved by WAD
- * directory order between the first and last member rather than by name arithmetic, which
- * is what makes {@code FIREWALA} to {@code FIREWALB} to {@code FIREWALL} work. The clock
- * is the engine tic carried by the snapshot, so freezing the engine also freezes the
- * animations.
+ * Vanilla texture/flat animation, applied at render bind time exactly like the engine's
+ * P_UpdateSpecials: sequences advance every 8 tics, and each member of a sequence runs
+ * PHASE-OFFSET by its own index (a floor mixing NUKAGE1 and NUKAGE2 stays out of step,
+ * as in DOOM). The animdef table is the engine's own (p/UnifiedGameMap.java animdefs);
+ * sequences are resolved by DIRECTORY ORDER between first and last (that is how
+ * FIREWALA -> FIREWALB -> FIREWALL works — it is not name arithmetic). Clocked by the
+ * ENGINE tic from the snapshot, so /doomwatch freeze also freezes the water.
  */
 public final class LatteAnims {
 
     private record Def(boolean wall, String last, String first, int speed) {}
 
-    /** The vanilla 1.9 animation table; a WAD's Boom {@code ANIMATED} lump replaces it. */
+    /** The vanilla 1.9 table (Boom's ANIMATED lump can extend this in the engine milestone). */
     private static final Def[] DEFS = {
         new Def(false, "NUKAGE3", "NUKAGE1", 8),
         new Def(false, "FWATER4", "FWATER1", 8),
@@ -52,9 +49,9 @@ public final class LatteAnims {
     /** texture key ("flats/nukage1") -> its sequence + own phase index. */
     private static final Map<String, Member> MEMBERS = new HashMap<>();
 
-    /** Builds the animation map after texture compositing, given the wall and flat names
-     * in WAD directory order. A Boom {@code ANIMATED} lump, if the WAD provides one,
-     * replaces the vanilla definitions and supplies its own per-animation speed. */
+    /** Called after compositing, with the WAD-directory-ordered names of walls and flats.
+     * Boom's ANIMATED lump (custom tables — Eviternity's OTEX cycles) replaces the
+     * vanilla defs when the WAD carries one; per-animation speed honored. */
     public static void build(List<String> orderedWalls, List<String> orderedFlats,
                              WadFile wad) {
         MEMBERS.clear();
@@ -97,13 +94,13 @@ public final class LatteAnims {
 
     /**
      * The directory as {@code W_CheckNumForName} resolves it: that search runs backward, so
-     * a name defined in more than one WAD resolves to the last definition, and a sequence
-     * range has to be measured over that same view. A patch WAD extends a vanilla animation
-     * by inserting its own frames between the first and last vanilla names, for example
-     * {@code FWATER1, FWATER02..FWATER31, FWATER4}. Measured inside that WAD's own block the
-     * range is 32 frames; measured over the base WAD's copies it collapses to four, two of
-     * which the patch never replaced, so the animation alternates between the patch's art
-     * and the base game's.
+     * a name defined in more than one WAD resolves to the last definition. A sequence range
+     * has to be taken over that same view. A patch WAD extends a vanilla animation by
+     * inserting its own frames between the first and last vanilla names, for example
+     * {@code FWATER1, FWATER02..FWATER31, FWATER4}, and the range is only 32 frames long
+     * when it is measured inside that WAD's own block. Measured over the base WAD's copies
+     * it collapses back to four, two of which the patch never replaced, so the animation
+     * alternates between the patch's art and the base game's.
      */
     private static List<String> lastWins(List<String> order) {
         final java.util.LinkedHashSet<String> seen = new java.util.LinkedHashSet<>();
@@ -114,8 +111,7 @@ public final class LatteAnims {
         return new java.util.ArrayList<>(seen);
     }
 
-    /** The texture key to bind for this key at the given engine tic; returns the key
-     * unchanged when the texture is not animated. */
+    /** The key to BIND for this key at this engine tic (identity for non-animated). */
     public static String frame(String key, int tic) {
         final Member m = MEMBERS.get(key);
         if (m == null) {

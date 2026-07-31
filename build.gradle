@@ -24,18 +24,18 @@ sourceSets {
 }
 
 loom {
+	accessWidenerPath = file('src/main/resources/lattedoom.accesswidener')
 	runs {
 		client {
 			programArgs("--username", "Steve")
-			// Offline usernames hash into one of nine default skins; pin the classic one.
+			// offline names hash into one of NINE default skins — pin classic Steve
 			vmArgs("-Dlattedoom.steveskin=true")
 		}
 		client2 {
 			client()
 			runDir "run2"
 			programArgs("--username", "Marine")
-			// Second local instance for LAN testing: a distinct window title keeps the two
-			// clients apart, and frustum culling is disabled here for A/B comparison.
+			// second client instance for LAN co-op testing
 			vmArgs("-Dlattedoom.title=Latte Doom P2", "-Dlattedoom.steveskin=true",
 				"-Dlattedoom.cull=false")
 		}
@@ -53,7 +53,7 @@ processResources {
 tasks.withType(JavaCompile).configureEach {
 	it.options.release = 25
 	it.options.encoding = 'UTF-8'
-	// The vendored engine predates most modern lints; compile errors still fail the build.
+	// The 2010-era engine code trips every lint in existence; errors still fail the build.
 	it.options.warnings = false
 }
 
@@ -62,14 +62,6 @@ java {
 	targetCompatibility = JavaVersion.VERSION_25
 }
 
-// The verification tasks below run against a WAD you supply. No game data ships with
-// this repository (see LEGAL.md), so pass your own IWAD path:
-//
-//     ./gradlew triProbe -Pwad=/path/to/DOOM.WAD [-Pmap=E1M1]
-//
-// doomSmoke reads its WAD from the DOOM_WAD environment variable, or from DOOM.WAD in
-// the run-smoke working directory.
-
 // Sector-triangulation gate: every map must triangulate watertight (see TriProbe).
 tasks.register('triProbe', JavaExec) {
 	group = 'verification'
@@ -77,7 +69,7 @@ tasks.register('triProbe', JavaExec) {
 	classpath = sourceSets.main.runtimeClasspath
 	mainClass = 'com.blackwithersteve.lattedoom.harness.TriProbe'
 	args = [
-		(project.findProperty('wad') ?: '').toString(),
+		(project.findProperty('wad') ?: 'DOOM.WAD').toString(),
 		(project.findProperty('map') ?: '').toString()
 	]
 }
@@ -89,41 +81,105 @@ tasks.register('moveProbe', JavaExec) {
 	classpath = sourceSets.main.runtimeClasspath
 	mainClass = 'com.blackwithersteve.lattedoom.harness.MoveProbe'
 	args = [
-		(project.findProperty('wad') ?: '').toString(),
+		(project.findProperty('wad') ?: 'DOOM.WAD').toString(),
 		(project.findProperty('map') ?: '').toString()
 	]
 }
 
-// Boots the real engine without Minecraft and dumps PNG frames of the title demo.
+// Boots the real engine WITHOUT Minecraft and dumps PNG frames of the title demo.
 tasks.register('doomSmoke', JavaExec) {
 	group = 'verification'
-	description = 'Headless engine smoke test: boot an IWAD, dump frames as PNGs.'
+	description = 'Headless engine smoke test: boot the given IWAD, dump frames as PNGs.'
 	classpath = sourceSets.main.runtimeClasspath
 	mainClass = 'com.blackwithersteve.lattedoom.harness.HeadlessSmoke'
 	workingDir = file('run-smoke')
 	doFirst { file('run-smoke').mkdirs() }
-	args = [(project.findProperty('wad') ?: '').toString()].findAll { !it.isEmpty() }
+	args = [(project.findProperty('wad') ?: 'DOOM.WAD').toString()]
 }
 
-// Generates a synthetic arena WAD, boots the engine on it and verifies monster AI runs.
 tasks.register('arenaProbe', JavaExec) {
 	group = 'verification'
-	description = 'Boot the engine on a generated arena and verify a spawned monster thinks.'
+	description = 'Overworld-arena A0 proof: boot the engine on a generated arena, verify an imp lives.'
 	classpath = sourceSets.main.runtimeClasspath
 	mainClass = 'com.blackwithersteve.lattedoom.harness.ArenaProbe'
-	args = [
-		(project.findProperty('wad') ?: '').toString(),
-	]
 	workingDir = file('run-arena')
 	doFirst { file('run-arena').mkdirs() }
 	ignoreExitValue = true
 }
 
-// Parses and applies DEHACKED/BEX from a WAD or .deh file against the real engine
-// tables, without booting the engine: ./gradlew dehProbe -PdehFile=/path/to/patch.deh
+// TNT MAP30 diagnostic: the red gate's USE reach and the doll-pad teleport death.
+tasks.register('tntProbe', JavaExec) {
+	group = 'verification'
+	description = 'TNT MAP30 diagnostic: keyed-gate USE reach + voodoo-doll telefrag billing.'
+	classpath = sourceSets.main.runtimeClasspath
+	mainClass = 'com.blackwithersteve.lattedoom.harness.TntProbe'
+	workingDir = file('run-tnt')
+	doFirst { file('run-tnt').mkdirs() }
+	ignoreExitValue = true
+	args = [(project.findProperty('wad') ?: '').toString(),
+	        (project.findProperty('file') ?: '').toString()].findAll { !it.isEmpty() }
+}
+
+// Client-side mesh diagnostic: bake a moving sector static vs mid-glide and diff.
+// BSP mesh vs classic mesh on every map of a WAD: areas and wall lengths must agree.
+tasks.register('bspProbe', JavaExec) {
+	group = 'verification'
+	description = 'BSP-truth mesh vs the classic mesh, every map, areas + wall lengths.'
+	classpath = sourceSets.main.runtimeClasspath
+	mainClass = 'com.blackwithersteve.lattedoom.harness.BspProbe'
+	ignoreExitValue = true
+	args = [(project.findProperty('wad') ?: '').toString()].findAll { !it.isEmpty() }
+}
+
+tasks.register('meshProbe', JavaExec) {
+	group = 'verification'
+	description = 'Bake a mover sector static vs interpolated and diff the outputs.'
+	classpath = sourceSets.main.runtimeClasspath
+	mainClass = 'com.blackwithersteve.lattedoom.harness.MeshGlideProbe'
+	args = [(project.findProperty('wad') ?: '').toString(),
+	        (project.findProperty('map') ?: 'E1M8').toString(),
+	        (project.findProperty('sector') ?: '30').toString()].findAll { !it.isEmpty() }
+}
+
+// Boss-special diagnostic: kill a named boss type on a map, watch the tagged sectors.
+tasks.register('bossProbe', JavaExec) {
+	group = 'verification'
+	description = 'Boss specials: the named type dies, the tagged sectors must move.'
+	classpath = sourceSets.main.runtimeClasspath
+	mainClass = 'com.blackwithersteve.lattedoom.harness.BossProbe'
+	workingDir = file('run-tnt')
+	doFirst { file('run-tnt').mkdirs() }
+	ignoreExitValue = true
+	args = [(project.findProperty('wad') ?: '').toString(),
+	        (project.findProperty('warp') ?: '18').toString(),
+	        (project.findProperty('type') ?: 'MT_BRUISER').toString(),
+	        (project.findProperty('file') ?: '').toString()].findAll { !it.isEmpty() }
+}
+
+tasks.register('saveProbe', JavaExec) {
+	group = 'verification'
+	description = 'Savegame round trip: G_SaveGame writes the per-set .dsg, G_LoadGame restores it.'
+	classpath = sourceSets.main.runtimeClasspath
+	mainClass = 'com.blackwithersteve.lattedoom.harness.SaveProbe'
+	workingDir = file('run-tnt')
+	doFirst { file('run-tnt').mkdirs() }
+	ignoreExitValue = true
+	args = [(project.findProperty('wad') ?: '').toString()].findAll { !it.isEmpty() }
+}
+
+// Prints the seamless loader's classification of every file in a wads folder.
+tasks.register('wadProbe', JavaExec) {
+	group = 'verification'
+	description = 'Classify every WAD/deh in a folder the way /load does.'
+	classpath = sourceSets.main.runtimeClasspath
+	mainClass = 'com.blackwithersteve.lattedoom.harness.WadScanProbe'
+	args = [(project.findProperty('dir') ?: '').toString()].findAll { !it.isEmpty() }
+}
+
+// Parses+applies DEHACKED/BEX from a wad or .deh file against the real tables, no engine boot.
 tasks.register('dehProbe', JavaExec) {
 	group = 'verification'
-	description = 'Parse and apply the DEHACKED/BEX lumps of a WAD or .deh file.'
+	description = 'DEHACKED/BEX parser proof: parse+apply a wad\'s DEHACKED lumps (default: Eviternity).'
 	classpath = sourceSets.main.runtimeClasspath
 	mainClass = 'com.blackwithersteve.lattedoom.harness.DehProbe'
 	args = [(project.findProperty('dehFile') ?: '').toString()].findAll { !it.isEmpty() }

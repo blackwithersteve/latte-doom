@@ -8,9 +8,9 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * Taking a hit in DOOM flashes the screen red and never rotates the camera, so
- * Minecraft's hurt tilt is cancelled while a player is transformed. The status-bar face
- * and the damage flash carry the feedback instead.
+ * Taking a hit in DOOM flashes the screen red — it never wrenches the camera around.
+ * Minecraft's hurt tilt (bobHurt) is cancelled while transformed; the STBAR face and
+ * the damage flash carry the feedback, 1993-style.
  */
 @Mixin(GameRenderer.class)
 public abstract class HurtShakeMixin {

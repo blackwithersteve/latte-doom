@@ -12,14 +12,11 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Plays a sound event: an effect id plus a map position, from the local player's own
- * WAD. This is how a spectator hears the world of the client running the engine: the
- * network carries ids and coordinates only, per rule 6 of {@code LEGAL.md}, and the
- * {@code DS*} lump bytes are read from this client's disk.
- *
- * <p>Volume follows the engine's own distance attenuation, full inside 200 map units and
- * silent beyond 1200, scaled by the mod's dedicated sound-effect volume. Playback uses
- * Java Sound, the same output path the engine uses natively.
+ * Plays a DOOM sound EVENT (sfx id + map position) from the local player's OWN WAD —
+ * how a spectator hears the level owner's world. The wire carries ids and coordinates
+ * only (LEGAL.md rule 6); the DS* lump bytes come from this client's disk. Volume uses
+ * DOOM's own attenuation (full inside 200u, silent past 1200u) times the dedicated DOOM
+ * SFX slider. Playback is plain Java Sound, same as the engine's native output.
  */
 public final class DoomSfx {
 
@@ -31,22 +28,24 @@ public final class DoomSfx {
     private static final AtomicInteger LIVE = new AtomicInteger();
     private static final int MAX_LIVE = 10;
 
-    /** Plays one sound event relative to the local listener, applying the engine's
-     * distance attenuation and its ±96/128 stereo swing about the listener's facing.
-     * With {@code hasPos} false the sound is world-global: full volume, centred. */
+    /** Play one remote sound event, positioned in YOUR ears: DOOM's distance
+     * attenuation and its ±96/128 stereo swing, panned against your own facing.
+     * hasPos=false = world-global (full volume, centered). */
     public static void play(int sfxId, boolean hasPos, double doomX, double doomY) {
         play(sfxId, hasPos, doomX, doomY, 1.0);
     }
 
-    /** As above, with an additional gain applied under the volume setting. Sounds played
-     * outside the engine's own mixer need it: the death scream uses 0.4 to sit at the
-     * same loudness as engine-mixed gameplay sounds. */
+    /** gain: extra per-call trim under the slider (1.0 = the same loudness the engine
+     * mixer gives a full-volume centered sound at the same slider position). */
     public static void play(int sfxId, boolean hasPos, double doomX, double doomY, double gain) {
         final Minecraft mc = Minecraft.getInstance();
         if (mc.player == null || sfxId <= 0 || sfxId >= data.sounds.S_sfx.length) {
             return;
         }
-        double vol = com.blackwithersteve.lattedoom.LatteDoomClient.doomSfxVolume() * gain;
+        // land on DOOM's 16 volume steps, exactly like the engine side of the slider —
+        // the two scales move together instead of drifting apart between detents
+        double vol = Math.round(
+            com.blackwithersteve.lattedoom.LatteDoomClient.doomSfxVolume() * 15.0) / 15.0 * gain;
         double pan = 0;
         if (hasPos) {
             final double lx = LatteWorld.worldToDoomX(mc.player.getX());
@@ -57,8 +56,8 @@ public final class DoomSfx {
                 vol *= Math.max(0.0, (1200.0 - dist) / 1000.0);
             }
             if (dist > 16.0) {
-                // S_AdjustSoundParams: pan by the angle between the listener's facing and
-                // the source, with the original's 96/128 swing so no channel goes silent.
+                // S_AdjustSoundParams: pan by the angle between your facing and the
+                // source — swing 96/128 like the original, so nothing goes fully deaf
                 final double a = Math.toRadians(-mc.player.getYRot() - 90.0);
                 final double rightness = (dx / dist) * Math.sin(a) - (dy / dist) * Math.cos(a);
                 pan = 0.75 * rightness;

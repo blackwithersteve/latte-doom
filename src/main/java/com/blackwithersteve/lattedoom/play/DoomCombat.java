@@ -18,20 +18,17 @@ import java.util.Map;
 import java.util.Random;
 
 /**
- * Translates DOOM weapon fire into damage against Minecraft entities.
+ * THE COMBAT TRANSLATION LAYER: the DOOM engine owns the trigger, the state machine
+ * and the ammo —
+ * this class watches the SUIT's own discharges (ammo drops, melee swing frames) and
+ * fires the equivalent MINECRAFT ray at the same moment: vanilla DOOM ranges, spreads
+ * and damage dice, against MC entities (mobs AND other players — co-op friendly fire is
+ * a DOOM tradition). Hits ship to the server (HitC2S) so guests work like the host, and
+ * arrive attributed to the shooter (mobs aggro back). Engine things stay the engine's
+ * business — an imp is shot by the ENGINE's hitscan, a creeper by this translator.
  *
- * <p>The engine owns the trigger, the weapon state machine and the ammunition. This class
- * observes the resulting discharges: ammunition decrements and melee swing frames, and
- * casts the equivalent Minecraft ray at the same moment, using DOOM's own ranges, spreads
- * and damage dice. Targets are Minecraft mobs and other players; monsters remain the
- * engine's business and are hit by its own hitscan code.
- *
- * <p>Hits are sent to the server so that clients other than the host behave identically,
- * and they arrive attributed to the shooter, so mobs retaliate against the right player.
- *
- * <p>Currently limited to hitscan weapons: fist, chainsaw, pistol, shotgun and chaingun.
- * Rockets, plasma and the BFG travel as engine projectiles, and their effect on Minecraft
- * entities is not implemented yet.
+ * v1 scope: hitscan weapons (fist, pistol, shotgun, chaingun, chainsaw). Rockets,
+ * plasma and BFG fly as engine projectiles — their MC-side blast is a later step.
  */
 public final class DoomCombat {
 
@@ -46,7 +43,7 @@ public final class DoomCombat {
     private static int lastWFrame = -1;
     private static long lastShotMs;
 
-    /** Called once per client tick with this client's own engine snapshot. */
+    /** Call once per client tick with the SUIT snapshot (our own engine). */
     public static void tick(Minecraft mc, WorldSnapshot suit) {
         final LocalPlayer p = mc.player;
         if (p == null || suit == null || !LatteWorld.marineForm()) {
@@ -57,7 +54,7 @@ public final class DoomCombat {
         final int bullets = suit.ammo != null && suit.ammo.length > 0 ? suit.ammo[0] : -1;
         final int shells = suit.ammo != null && suit.ammo.length > 1 ? suit.ammo[1] : -1;
         if (weapon != lastWeapon) {
-            // While switching weapons, ammunition differences are not discharges.
+            // switching hands: ammo deltas across the switch are not discharges
             lastWeapon = weapon;
             lastAmmoBullets = bullets;
             lastAmmoShells = shells;
@@ -65,7 +62,7 @@ public final class DoomCombat {
             return;
         }
 
-        // ---- Discharge detection, based on the engine's own ammunition bookkeeping. ----
+        // ---- discharge detection: the ENGINE's ammo bookkeeping is the truth ----
         int shots = 0;
         if (weapon == 1 || weapon == 3) { // pistol, chaingun: bullets
             if (lastAmmoBullets >= 0 && bullets >= 0 && bullets < lastAmmoBullets) {
@@ -83,10 +80,9 @@ public final class DoomCombat {
         lastAmmoBullets = bullets;
         lastAmmoShells = shells;
 
-        // ---- Melee weapons consume no ammunition, so discharges are detected from the
-        // weapon sprite's swing frames instead. This is deliberately not gated on the fire
-        // button, because a tapped swing plays out long after the button is released; the
-        // engine only reaches these frames when it has accepted a shot. ----
+        // ---- melee: no ammo, so watch the weapon sprite's swing frames. NOT gated on
+        // the button (a tap's swing plays out long after the click is released) — the
+        // engine only reaches these frames when it accepted a fire. ----
         int melee = 0;
         final int wf = suit.wFrame & 0x7FFF;
         if (wf != lastWFrame) {
@@ -103,11 +99,11 @@ public final class DoomCombat {
         }
         final boolean refire = System.currentTimeMillis() - lastShotMs < 500;
         lastShotMs = System.currentTimeMillis();
-        // Swing the Minecraft arm on each discharge. Vanilla attacks are cancelled while
-        // transformed, so this is what drives the attack frame other players see.
+        // swing the MC arm on each discharge: vanilla attacks are cancelled in form, so
+        // this is what drives the attack frame (E) other players see on the marine body
         p.swing(net.minecraft.world.InteractionHand.MAIN_HAND);
 
-        // ---- Translate each discharge into Minecraft-space rays. ----
+        // ---- translate each discharge into Minecraft rays ----
         final Map<Integer, Integer> damageByEntity = new HashMap<>();
         for (int s = 0; s < shots; s++) {
             switch (weapon) {
@@ -133,8 +129,8 @@ public final class DoomCombat {
             ray(mc, p, 2.0, MELEE_RANGE_BLOCKS, 2 * (1 + DICE.nextInt(10)), damageByEntity);
         }
         for (Map.Entry<Integer, Integer> e : damageByEntity.entrySet()) {
-            // Clamp to the server's per-hit cap: a point-blank super shotgun volley can
-            // exceed it, and an over-cap packet is rejected in full, losing the whole hit.
+            // clamp to the server's per-hit cap so a point-blank SSG/double-shell volley isn't
+            // rejected wholesale (>120 = the whole packet was dropped, so the blast did nothing)
             com.blackwithersteve.lattedoom.net.LatteNet.sendHit(e.getKey(), Math.min(120, e.getValue()));
         }
     }
@@ -144,8 +140,8 @@ public final class DoomCombat {
         return 5 * (1 + DICE.nextInt(3));
     }
 
-    /** Casts one hitscan ray in Minecraft space: from the eye, along the look direction
-     * with DOOM's yaw jitter applied, clipped by blocks, against the first living entity. */
+    /** One hitscan ray in MINECRAFT space: eye origin, look direction with DOOM's yaw
+     * jitter, clipped by blocks, hitting the first living entity. */
     private static void ray(Minecraft mc, LocalPlayer p, double spreadDeg, double range,
                             int damageHp, Map<Integer, Integer> out) {
         final Vec3 eye = p.getEyePosition();

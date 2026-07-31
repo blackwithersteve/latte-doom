@@ -18,11 +18,10 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * Feeds the raised DOOM level into the world's deferred-submit pass, immediately after
- * entities. This uses the same per-frame {@link SubmitNodeCollector} surface that entity
- * renderers use, which avoids introducing a client-side placeholder entity: an
- * {@code EntityType} lives in a synchronised registry and would prevent the client from
- * joining vanilla servers.
+ * Feeds the raised DOOM level into the world's deferred-submit pass, right after entities —
+ * the same per-frame SubmitNodeCollector surface entity renderers get, without needing any
+ * client-side fake entity (whose EntityType would live in a SYNCED registry and break joining
+ * vanilla servers).
  */
 @Mixin(LevelRenderer.class)
 abstract class LevelRendererMixin {
@@ -34,11 +33,10 @@ abstract class LevelRendererMixin {
     }
 
     /**
-     * Draws the level's persistent GPU buffers in a dedicated pass once the world frame
-     * graph has run and the composited colour and depth are in the main render target.
-     * This is a no-op unless persistent-buffer mode is enabled. It is the only point at
-     * which a top-level render pass can be opened with the world already drawn, since
-     * Fabric's world-render callbacks no longer exist in this Minecraft version.
+     * S2: after the world frame-graph has run and the composited color+depth live in the main
+     * render target, draw the level's persistent GPU buffers in our own pass. No-op unless
+     * /persist is on. This is the only legal spot to open our own top-level RenderPass with
+     * the world already drawn (Fabric's world-render callbacks are gone in 26.2).
      */
     @Inject(method = "render", at = @At("TAIL"))
     private void lattedoom$drawPersistent(GraphicsResourceAllocator alloc, DeltaTracker delta,

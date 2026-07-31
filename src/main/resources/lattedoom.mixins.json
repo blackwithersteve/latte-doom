@@ -3,7 +3,6 @@
 	"package": "com.blackwithersteve.lattedoom.mixin",
 	"compatibilityLevel": "JAVA_21",
 	"mixins": [
-    //no more fortnight!
 		"CrouchEdgeMixin",
 		"FallDamageMixin",
 		"ItemEntityMixin",
@@ -12,6 +11,7 @@
 		"PlayerHurtSoundMixin"
 	],
 	"client": [
+		"RangedAlertMixin",
 		"AvatarDimensionsMixin",
 		"AvatarSubmitMixin",
 		"DeathCameraMixin",
@@ -23,8 +23,8 @@
 		"KeyboardInputMixin",
 		"LevelRendererMixin",
 		"MarineAttackMixin",
-		"PlayerTravelMixin",
-		"RangedAlertMixin"
+		"PitchLockMixin",
+		"PlayerTravelMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1

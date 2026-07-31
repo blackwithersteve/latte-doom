@@ -12,10 +12,12 @@ import net.minecraft.resources.Identifier;
 import org.lwjgl.glfw.GLFW;
 
 /**
- * Episode finale: end text typed out in the WAD's {@code STCFN} font over the episode's
- * flat, one character every three tics, then the end artwork. Flat and artwork are chosen
- * per episode as in {@code f_finale.c}. A press skips the typing; a press on the artwork
- * ends the session. Finale music keeps playing from the engine.
+ * THE FINALE, rendered natively in Minecraft: the episode-end text typewritten in the
+ * WAD's own STCFN small font over the episode's flat (f_finale.c: FLOOR4_8 / SFLR6_1 /
+ * MFLR8_4 / MFLR8_3, 1 char per 3 tics), then the end art (CREDIT / VICTORY2 / PFUB1 /
+ * ENDPIC). A press skips the typewriter; when the art is up, a press (or M/grave) ends
+ * the adventure — back to Minecraft, the engine returns to its title. The finale MUSIC
+ * (D_VICTOR) keeps playing from the engine underneath, untouched.
  */
 public final class LatteFinaleScreen extends Screen {
 
@@ -30,7 +32,7 @@ public final class LatteFinaleScreen extends Screen {
     private boolean artStage;
 
     public LatteFinaleScreen(DoomHost host) {
-        super(Component.literal("Latte Doom: finale"));
+        super(Component.literal("Latte Doom — finale"));
         this.host = host;
         final int ep = Math.min(4, host != null ? host.episodeNow() : 1);
         this.flat = FLATS[(ep - 1) % FLATS.length];
@@ -58,18 +60,16 @@ public final class LatteFinaleScreen extends Screen {
         ticks++;
         final int gsk = host != null ? host.gamestateKind() : -1;
         if (gsk == 0) {
-            onClose(); // a new level went live, which is not expected during the finale
+            onClose(); // a new level went live under us (shouldn't normally happen)
         }
-        // Auto-advance as the engine does: once the text has finished and a short wait
-        // has elapsed, move to the art stage.
+        // vanilla auto-advance: text done + a wait -> the art stage (engine does the same)
         if (!artStage && shownChars() >= text.length() && ticks > text.length() * 12 / 7 + 140) {
             artStage = true;
         }
     }
 
     private int shownChars() {
-        // One character per 3 engine tics, i.e. 35/3 characters per second, which is
-        // about 7 characters per 12 client ticks.
+        // 1 char per 3 doom tics = 35/3 chars/s ≈ 7 chars per 12 client ticks
         return Math.min(text.length(), ticks * 7 / 12);
     }
 
@@ -83,7 +83,7 @@ public final class LatteFinaleScreen extends Screen {
             LatteHud.drawGfx(g, art, 0, 0, this.width, this.height);
             return;
         }
-        // The episode's flat, tiled across the 320x200 canvas in V_DrawPatch space.
+        // the episode flat, tiled across the 320x200 canvas at 4:3 like V_DrawPatch space
         final int[] size = DoomRuntimeTextures.textureSize("flats/" + flat);
         if (size == null) {
             return;
@@ -108,7 +108,7 @@ public final class LatteFinaleScreen extends Screen {
         if (artStage) {
             return;
         }
-        // F_TextWrite: the STCFN font, starting at canvas (10, 10) with an 11-pixel line step.
+        // F_TextWrite: STCFN font, canvas start (10,10), 11px line step
         double x = 10, y = 10;
         final int shown = shownChars();
         for (int i = 0; i < shown; i++) {
@@ -159,11 +159,10 @@ public final class LatteFinaleScreen extends Screen {
         }
     }
 
-    /** Ends the play session at the close of an episode and returns to Minecraft. */
+    /** The episode is over: back to Minecraft (the DOOM session ends, like Quit). */
     private void endAdventure() {
         if (com.blackwithersteve.lattedoom.render.LatteWorld.warpedIn()) {
-            // Leave the level dimension first: ending the session must never strand the
-            // player inside it.
+            // out of the void dimension FIRST — quitting must never strand you in it
             com.blackwithersteve.lattedoom.render.LatteWorld.leaveLevelDim(
                 net.minecraft.client.Minecraft.getInstance());
         }

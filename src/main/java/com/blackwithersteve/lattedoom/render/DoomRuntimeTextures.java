@@ -19,12 +19,11 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Composites a WAD's wall textures, from its {@code TEXTURE1}/{@code TEXTURE2}, {@code PNAMES}
- * and patch lumps, together with its flats, into GPU textures when a level loads, registering
- * each under the identifier the level mesh binds.
- *
- * <p>No artwork is bundled with the mod: the user's own WAD, plus any patch WADs, is the sole
- * source, and everything is composited at the moment a level needs it.
+ * Composites a WAD's wall textures (TEXTURE1/TEXTURE2 + PNAMES + patches) and flats into GPU
+ * textures at load time, registering each under the Identifier the level mesh binds
+ * (lattedoom:textures/doom/walls|flats/&lt;name&gt;.png). In Latte Doom NOTHING is baked at build
+ * time — the engine's own IWAD (and any PWADs) is the single source of art, composited here the
+ * moment a level needs it.
  */
 public final class DoomRuntimeTextures {
 
@@ -36,16 +35,15 @@ public final class DoomRuntimeTextures {
     private static int[] iwadPalette; // the baked IWAD palette, loaded once
     private static String loadedWad;  // the wad id whose textures are currently registered
 
-    /** Point the geometry's runtime-texture lookup at this registry. Idempotent. */
+    /** Wire the geometry's runtime-texture lookup to us (idempotent). */
     public static void init() {
         LatteMesh.setTexSize(sizes::get);
     }
 
     /**
-     * A texture whose sampler repeats, with nearest filtering to keep it pixel-crisp.
-     * Walls and flats therefore tile on the GPU and the mesh never has to be split at a
-     * texture repeat, which is what allows one quad per wall and whole-sector floor
-     * triangles.
+     * A DynamicTexture whose sampler REPEATs (nearest-filtered, pixel-crisp): walls and
+     * flats tile on the GPU, so the mesh never splits geometry at texture-repeat
+     * boundaries — one quad per wall, whole-sector flat triangles.
      */
     private static final class RepeatTexture extends DynamicTexture {
         RepeatTexture(String label, int w, int h) {
@@ -65,10 +63,10 @@ public final class DoomRuntimeTextures {
     }
 
     /**
-     * Ensures a WAD's textures are composited and registered. Called before the mesh is
-     * built, so that registration always precedes both the geometry build, which needs real
-     * texture keys, and the first bind, which would otherwise show a missing-texture
-     * placeholder. Idempotent per WAD, so rebuilding the mesh does not recomposite.
+     * Ensure a runtime WAD's textures are composited + registered — called at the TOP of the mesh
+     * build so registration always happens BEFORE the geometry is baked (real keys) and before the
+     * render binds them (no "Missing resource" placeholder). Idempotent per wad id, so mesh rebuilds
+     * on height changes don't re-composite.
      */
     public static void ensureLoaded(String wadId) {
         if (java.util.Objects.equals(wadId, loadedWad)) {
@@ -103,7 +101,7 @@ public final class DoomRuntimeTextures {
         }
         final int[] pal = palette(wad);
         if (pal == null) {
-            LOGGER.warn("DoomRuntimeTextures: no palette (baked playpal.dat missing?), custom textures will be gray");
+            LOGGER.warn("DoomRuntimeTextures: no palette (baked playpal.dat missing?) — custom textures will be gray");
             return;
         }
         try {
@@ -126,17 +124,17 @@ public final class DoomRuntimeTextures {
         } catch (Exception e) {
             LOGGER.error("DoomRuntimeTextures: status graphics composite failed", e);
         }
-        // Guaranteed fallback: the mesh substitutes the GRAY1 texture for any texture it
-        // cannot resolve. That lump is present in every stock IWAD, but one is synthesised
-        // when a WAD lacks it, so the fallback itself can never be missing.
+        // Guaranteed fallback: the geometry substitutes "walls/gray1" for any texture it can't
+        // resolve. GRAY1 ships in every DOOM IWAD, but synthesize one if this WAD lacks it so the
+        // fallback itself can never be missing (a PWAD loaded standalone, Freedoom oddities...).
         if (!sizes.containsKey("walls/gray1")) {
             final int[] gray = new int[64 * 64];
             java.util.Arrays.fill(gray, 0xFF6C6C6C);
             register("walls/gray1", gray, 64, 64);
         }
         LatteAnims.build(orderedWalls, orderedFlats, wad);
-        // A WAD's SWITCHES lump: the rendering side needs the same switch pairs the engine
-        // matches against, falling back to the built-in name prefixes.
+        // Boom SWITCHES lump: the client's switch-visual swap needs the same custom
+        // pairs the engine matches on (Eviternity) — vanilla SW1/SW2 prefix as fallback
         final java.util.Map<String, String> pairs = new java.util.HashMap<>();
         final byte[] sw = wad.lumpBytes("SWITCHES");
         if (sw != null) {
@@ -211,9 +209,9 @@ public final class DoomRuntimeTextures {
                     continue;
                 }
                 final String key = "walls/" + name.toLowerCase(Locale.ROOT);
-                orderedWalls.add(name); // directory order: animation sequences resolve on this
+                orderedWalls.add(name); // directory order — animation sequences resolve on this
                 if (bakedExists(key)) {
-                    continue; // already supplied by the mod, so nothing to composite
+                    continue; // a standard IWAD texture — the baked PNG already covers it
                 }
                 final int[] argb = new int[w * h]; // transparent where uncovered
                 for (int p = 0; p < patchCount; p++) {
@@ -255,7 +253,7 @@ public final class DoomRuntimeTextures {
                 continue;
             }
             final String key = "flats/" + n.toLowerCase(Locale.ROOT);
-            orderedFlats.add(n); // directory order: animation sequences resolve on this
+            orderedFlats.add(n); // directory order — animation sequences resolve on this
             if (bakedExists(key)) {
                 continue;
             }
@@ -272,10 +270,9 @@ public final class DoomRuntimeTextures {
     }
 
     /**
-     * Composites the sprite lumps between the {@code S_START} and {@code S_END} markers and
-     * registers each with a clamping sampler: billboards never tile, and a repeating sampler
-     * would bleed the opposite edge's texels along the borders. The left and top offsets
-     * from each patch header are kept for anchoring the billboard.
+     * Sprite lumps (patch format): composite each between S_START..S_END and register with a
+     * CLAMP sampler (billboards never tile; REPEAT would bleed the opposite edge's texels at
+     * the borders). Left/top offsets from the patch header are stored for billboard anchoring.
      */
     private static void loadSprites(WadFile wad, int[] pal) {
         boolean in = false;
@@ -317,20 +314,19 @@ public final class DoomRuntimeTextures {
     }
 
     /**
-     * Composites the interface graphics, which are loose patch lumps outside any markers:
-     * the status bar, its large and small digits, the keys and the full set of faces.
-     * Registered under {@code gfx/<lump>} with clamping sampling.
+     * Status-bar graphics (loose patch lumps outside any markers): the bar, big/small
+     * digits, keys, the whole face set. Registered as "gfx/<lump>" with CLAMP sampling.
      */
     private static void loadStatusGraphics(WadFile wad, int[] pal) {
         final String[] prefixes = {"STBAR", "STARMS", "STTNUM", "STTPRCNT", "STTMINUS",
             "STYSNUM", "STGNUM", "STKEYS", "STF",
-            // The M_ prefix covers the menu graphics: title and label patches, the
-            // thermometer pieces and the skull cursor.
+            // "M_" grabs the menu graphics (title/label patches, the M_THERM* thermometer
+            // pieces and the M_SKULL cursor) for the authentic DOOM-styled volume screen
             "M_",
-            // Artwork for the menu, intermission and finale screens, which are drawn as
-            // Minecraft screens: the title, credit and help pages, the full intermission
-            // set of banners, level names, digits and backgrounds, and the small font used
-            // for the finale text.
+            // the NATIVE shell (menu / intermission / finale rendered in Minecraft):
+            // TITLEPIC + CREDIT + HELP screens, the WI* intermission set (WIF/WIENTER,
+            // WILVxx level names, WINUM digits, WIOSTK/WIOSTI/WISCRT2/WITIME/WIPAR/WIPCNT,
+            // WIMAPx backgrounds), and the STCFN small font for finale text
             "TITLEPIC", "CREDIT", "HELP", "WI", "STCFN", "INTERPIC", "PFUB",
             "VICTORY2", "ENDPIC"};
         for (WadFile.Lump lump : wad.lumps) {
@@ -365,8 +361,7 @@ public final class DoomRuntimeTextures {
                 continue;
             }
             register(key, argb, w, h, false);
-            // V_DrawPatch subtracts these when drawing; the status-bar faces carry large
-            // offsets in particular.
+            // V_DrawPatch subtracts these on draw — the FACE lumps carry big ones
             spriteOffsets.put(safe(key), new int[]{leftOfs, topOfs});
         }
     }
@@ -380,10 +375,9 @@ public final class DoomRuntimeTextures {
             .toUpperCase(Locale.ROOT);
     }
 
-    /** Minecraft resource identifiers allow only {@code [a-z0-9/._-]}, while sprite
-     * rotation pairs in some WADs use bracket and backslash characters in their lump
-     * names. This single point maps those to safe tokens, and every producer and consumer
-     * of a texture key routes through it. */
+    /** Minecraft Identifiers allow [a-z0-9/._-] only — DOOM sprite rotation pairs use
+     * '[', '\' and ']' in lump names (Eviternity's BBRN[1 etc.). One choke point maps
+     * them to safe tokens; every key producer and consumer routes through here. */
     public static String safe(String key) {
         if (key.indexOf('[') < 0 && key.indexOf('\\') < 0 && key.indexOf(']') < 0) {
             return key;
@@ -426,7 +420,7 @@ public final class DoomRuntimeTextures {
             for (int y = 0; y < h; y++) {
                 for (int x = 0; x < w; x++) {
                     final int a = argb[y * w + x];
-                    // ARGB to ABGR: the red and blue channels are swapped for upload.
+                    // ARGB -> ABGR (swap R/B), exactly like CocoaDoomScreen's framebuffer upload
                     final int abgr = (a & 0xFF00FF00) | ((a & 0xFF) << 16) | ((a >> 16) & 0xFF);
                     pixels.setPixelABGR(x, y, abgr);
                 }
@@ -461,7 +455,7 @@ public final class DoomRuntimeTextures {
                 if (topDelta == 0xFF) {
                     break;
                 }
-                // Tall-patch convention: a non-increasing topdelta is relative to the previous post.
+                // tall-patch convention: non-increasing topdelta is relative to the previous post
                 final int top = (prevTop >= 0 && topDelta <= prevTop) ? prevTop + topDelta : topDelta;
                 prevTop = top;
                 final int len = data[ofs + 1] & 0xFF;
@@ -480,7 +474,7 @@ public final class DoomRuntimeTextures {
         }
     }
 
-    /** Headless composite of one named texture (no GPU) for the probe harness. Fills wh=[w,h]. */
+    /** Headless composite of ONE named texture (no GPU) for the probe harness. Fills wh=[w,h]. */
     public static int[] debugComposite(WadFile wad, String texName, int[] wh) {
         final int[] pal = palette(wad);
         if (pal == null) {
@@ -565,7 +559,7 @@ public final class DoomRuntimeTextures {
         return null;
     }
 
-    /** No artwork is bundled, so every texture is composited from the WAD at runtime. */
+    /** Latte Doom bakes NOTHING — every texture is composited from the WAD at runtime. */
     private static boolean bakedExists(String key) {
         return false;
     }

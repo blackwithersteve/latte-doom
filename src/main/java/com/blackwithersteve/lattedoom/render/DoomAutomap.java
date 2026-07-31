@@ -4,38 +4,32 @@ import com.blackwithersteve.lattedoom.engine.WorldSnapshot;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 
 /**
- * The automap, drawn over the Minecraft HUD from the same map data the level mesh is built
- * from, rather than by showing the engine's own screen. It follows the rules in
- * {@code am_map.c}:
- * <ul>
- *   <li>Only lines the player has seen are drawn, as recorded by the engine's
- *       {@code ML_MAPPED} flag and carried in the snapshot. The computer area map power-up
- *       adds the remaining lines in grey.</li>
- *   <li>One-sided and secret lines are red, floor-change lines brown and ceiling-change
- *       lines yellow, while {@code ML_DONTDRAW} lines are hidden. Heights are compared
- *       against live sector values, so doors and lifts change colour as they move.</li>
- *   <li>The player is a white arrow of the original seven-segment shape, drawn north-up in
- *       follow mode.</li>
- *   <li>The field is black down to the status bar, which is drawn on top.</li>
- * </ul>
- * Keypad plus and minus zoom at the original's rate of 1.02 per tic, and the map is
- * toggled with the configurable automap key.
+ * DOOM's automap, drawn NATIVE over the Minecraft HUD — no flat engine screen. The
+ * classic look, rebuilt from the
+ * same DoomMap the level mesh uses, with vanilla am_map.c rules:
+ *  - only lines the ENGINE's own renderer has seen (ML_MAPPED, via the snapshot) draw;
+ *    the Computer Area Map power adds the unseen rest in gray;
+ *  - one-sided and SECRET lines red, floor-change lines brown, ceiling-change yellow,
+ *    ML_DONTDRAW hidden — heights compared LIVE (doors/lifts change color as they move);
+ *  - the white player arrow (the original 7-segment shape), north-up, follow mode;
+ *  - black field down to the status bar, STBAR drawn on top, like 1993.
+ * Zoom with keypad +/- (vanilla's 1.02x per tic). Toggled by the rebindable automap key.
  */
 public final class DoomAutomap {
 
-    // Palette entries from am_map.c, matching the original's PLAYPAL colours.
+    // vanilla am_map.c palette entries, PLAYPAL-faithful
     private static final int BG = 0xFF000000;
     private static final int WALL = 0xFFFC0000;      // WALLCOLORS (reds)
-    private static final int FDWALL = 0xFFBC7845;    // FDWALLCOLORS (browns): floor change
-    private static final int CDWALL = 0xFFFCFC00;    // CDWALLCOLORS (yellows): ceiling change
-    private static final int UNSEEN = 0xFF6C6C6C;    // GRAYS: revealed by the area map only
+    private static final int FDWALL = 0xFFBC7845;    // FDWALLCOLORS (browns) — floor change
+    private static final int CDWALL = 0xFFFCFC00;    // CDWALLCOLORS (yellows) — ceiling change
+    private static final int UNSEEN = 0xFF6C6C6C;    // GRAYS — allmap-revealed, never walked
     private static final int ARROW = 0xFFFFFFFF;     // white player arrow
 
     private static final int ML_SECRET = 0x0020;
     private static final int ML_DONTDRAW = 0x0080;
 
     private static boolean active;
-    /** gui pixels per map unit, adjusted by the zoom keys and seeded on first draw. */
+    /** GUI pixels per doom unit, zoomed by the +/- keys. Seeded on first draw. */
     private static double scale;
 
     public static boolean active() {
@@ -51,23 +45,37 @@ public final class DoomAutomap {
         scale = 0;
     }
 
+    private static double minScale;
+
     public static void zoom(boolean in) {
         if (scale > 0) {
-            scale *= in ? 1.02 : 1.0 / 1.02; // M_ZOOMIN / M_ZOOMOUT per tic
+            scale *= in ? 1.02 : 1.0 / 1.02; // vanilla M_ZOOMIN / M_ZOOMOUT per tic
+            if (minScale > 0 && scale < minScale) {
+                scale = minScale; // the whole map is in view; further out is just haze
+            }
         }
     }
 
-    /** Draws the map beneath the status bar. The player position and angle are given in
-     * map coordinates. */
+    /** Draw under the STBAR. Player position/angle in DOOM map coords (the mirror's). */
     static void draw(GuiGraphicsExtractor g, DoomMap map, WorldSnapshot snap,
                      double px, double py, double pAngDeg, int guiW, int guiH) {
-        // The automap field covers the view area: everything above the status bar, which
-        // begins at canvas y 168.
-        final int amH = (int) Math.round(168.0 * guiH / 200.0);
+        // the map owns the whole screen; only the classic status bar keeps its strip,
+        // exactly the original's split — at larger screen sizes nothing of the world
+        // shows through underneath
+        final boolean bar = com.blackwithersteve.lattedoom.LatteDoomClient.hudSize() == 0;
+        final int amH = bar ? (int) Math.round(168.0 * guiH / 200.0) : guiH;
         g.fill(0, 0, guiW, amH, BG);
         if (scale <= 0) {
-            // On first open, fit roughly 1500 map units across, close to the
-            // original's initial window.
+            // seed at "most of the map in view": readable at a glance, and +/- zooms
+            // from there — the old seed framed a corridor and read as a wall of lines
+            final double mw = Math.max(64.0, map.maxX - map.minX);
+            final double mh = Math.max(64.0, map.maxY - map.minY);
+            final double fit = Math.min(guiW / mw, guiH / mh);
+            scale = fit * 1.4;
+            minScale = fit * 0.85;
+        }
+        if (false) {
+            // first open: fit ~1500 map units across, the vanilla-ish initial window
             scale = guiW / 1500.0;
         }
         final double cx = guiW / 2.0, cy = amH / 2.0;
@@ -82,13 +90,13 @@ public final class DoomAutomap {
                     continue;
                 }
                 if (l.backSector() < 0 || (l.flags() & ML_SECRET) != 0) {
-                    color = WALL; // one-sided, and secret lines are drawn as one-sided
+                    color = WALL; // one-sided (and secrets disguise as one-sided)
                 } else if (heightDiff(snap, map, l, true)) {
                     color = FDWALL;
                 } else if (heightDiff(snap, map, l, false)) {
                     color = CDWALL;
                 } else {
-                    continue; // two-sided with equal heights: not drawn
+                    continue; // two-sided, same heights: invisible without IDDT
                 }
             } else if (snap.allmap && (l.flags() & ML_DONTDRAW) == 0) {
                 color = UNSEEN;
@@ -99,16 +107,15 @@ public final class DoomAutomap {
                 cx + (l.x2() - px) * scale, cy - (l.y2() - py) * scale, color, amH);
         }
 
-        // The player arrow: the original's seven segments at a radius of 16 map units,
-        // rotated to the facing. Screen y is inverted relative to map y, so the rotation
-        // angle changes sign.
+        // the player arrow: vanilla's 7 segments, R=16 map units, rotated to the facing.
+        // Screen y is inverted vs map y, so the rotation angle flips sign.
         final double r = 16.0 * scale;
         final double a = -Math.toRadians(pAngDeg);
         final double[][] arrow = {
             {-r - r / 8, 0, r, 0},              // main shaft
             {r, 0, r - r / 2, r / 4},           // head barb up
             {r, 0, r - r / 2, -r / 4},          // head barb down
-            {-r - r / 8, 0, -r - r / 8, r / 4}, // tail barbs
+            {-r - r / 8, 0, -r - r / 8, r / 4}, // tail barb up... vanilla tail
             {-r - r / 8, 0, -r - r / 8, -r / 4},
             {-r + r / 8, 0, -r - r / 8, r / 4}, // tail chevron
             {-r + r / 8, 0, -r - r / 8, -r / 4},
@@ -121,8 +128,7 @@ public final class DoomAutomap {
         }
     }
 
-    /** Compares live sector heights across a two-sided line, so doors and lifts change
-     * colour as they move. */
+    /** LIVE height comparison across a two-sided line (doors/lifts recolor as they move). */
     private static boolean heightDiff(WorldSnapshot snap, DoomMap map, DoomMap.Line l,
                                       boolean floor) {
         final int f = l.frontSector(), b = l.backSector();
@@ -137,9 +143,8 @@ public final class DoomAutomap {
         return floor ? sf.floorH() != sb.floorH() : sf.ceilH() != sb.ceilH();
     }
 
-    /** Draws a one-pixel line at an arbitrary angle by rotating the gui pose and filling a
-     * thin quad. Lines entirely outside the automap field are skipped, since a rotated pose
-     * fill cannot be scissored. */
+    /** Arbitrary-angle 1px line: rotate the GUI pose, fill a thin quad. Clipped to the
+     * automap field by skipping lines fully outside (the pose fill has no scissor). */
     private static void line(GuiGraphicsExtractor g, double x1, double y1,
                              double x2, double y2, int color, int amH) {
         if ((y1 < 0 && y2 < 0) || (y1 > amH && y2 > amH)) {

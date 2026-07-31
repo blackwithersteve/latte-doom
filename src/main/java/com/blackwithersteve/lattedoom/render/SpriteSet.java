@@ -5,22 +5,18 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * The WAD's sprite table, built on the rendering side from the same WAD file the engine
- * booted; it performs the equivalent of the engine's {@code R_InitSpriteDefs}. The
- * {@code S_START}..{@code S_END} range is scanned and each lump name is parsed as a
- * four-character sprite name, a frame letter and a rotation digit, optionally followed by
- * a second frame and rotation for a mirrored view. Lookups then answer which lump to draw,
- * and whether to mirror it, for a given sprite, frame and rotation. Rotation 0 lumps cover
- * all eight views, and mirrored pairs such as {@code TROOA2A8} share one lump with the
- * flip applied to the second view.
+ * The WAD's sprite table — R_InitSpriteDefs's job, done on our side of the translator from
+ * the same WAD file the engine booted. Scans S_START..S_END, parses each lump name into
+ * (4-char sprite)(frame letter)(rotation digit)[(mirrored frame)(rotation)], and answers
+ * "which lump + flip for sprite S, frame F, rotation R". Rotation 0 lumps cover all 8
+ * views; mirrored pairs (e.g. TROOA2A8) share one lump with flip on the second.
  */
 public final class SpriteSet {
 
     /** One resolved view: the lump name (texture key suffix) and whether to mirror it. */
     public record View(String lump, boolean flip) {}
 
-    /** Sprite name plus frame letter, such as "TROOA", to its eight rotations. A lump with
-     * rotation 0 fills all eight. */
+    /** key = "TROOA" (sprite+frame letter) -> 8 rotations (index 0-7 = DOOM rot 0-7... rot0-only fills all). */
     private final Map<String, View[]> frames = new HashMap<>();
 
     public static SpriteSet load(WadFile wad) {

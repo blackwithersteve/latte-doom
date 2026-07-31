@@ -10,23 +10,22 @@ import java.nio.file.Path;
 import java.util.List;
 
 /**
- * Headless check that monsters run on a generated map: builds an arena PWAD with one imp,
- * boots the engine on it and verifies the imp spawns, thinks, chases a moving player
- * position and attacks.
+ * OVERWORLD ARENA — stage A0 proof (headless). Generates the flat arena PWAD with an imp
+ * in it, boots the REAL engine on it (overriding E1M1), and verifies the imp SPAWNS and
+ * THINKS. If this passes, the engine can host real DOOM monsters on a generated map — the
+ * whole overworld-arena plan is viable. If not, we found out for the price of one probe.
  *
- * <p>{@code ./gradlew arenaProbe -Pwad=/path/to/DOOM.WAD}, or the {@code DOOM_WAD}
- * environment variable, or {@code DOOM.WAD} in the working directory.
+ * Run: gradlew arenaProbe
  */
 public final class ArenaProbe {
 
     public static void main(String[] args) throws Exception {
-        final String env = System.getenv("DOOM_WAD");
-        final Path iwad = Path.of(args.length > 0 && !args[0].isEmpty() ? args[0]
-            : (env != null && !env.isEmpty() ? env : "DOOM.WAD"));
+        final Path iwad = Path.of(args.length > 0 ? args[0]
+            : "DOOM.WAD");
         final Path dir = Path.of("run-arena");
         Files.createDirectories(dir);
 
-        // An arena containing one imp, thing type 3001, north of the player start.
+        // arena with one imp (type 3001) north of the player start
         final byte[] wad = ArenaWad.build(List.of(new ArenaWad.Spawn(3001, 0, 512, 270)));
         final Path arenaWad = dir.resolve("arena.wad");
         Files.write(arenaWad, wad);
@@ -43,11 +42,11 @@ public final class ArenaProbe {
         }
         System.out.println("[arena] state=" + host.state());
         if (host.state() != DoomHost.State.RUNNING) {
-            System.out.println("RESULT: FAIL, engine did not reach RUNNING");
+            System.out.println("RESULT: FAIL — engine did not reach RUNNING");
             System.exit(2);
         }
 
-        // Wait for the level to load and publish a snapshot, which confirms the map loaded.
+        // wait for the level to load and publish a snapshot (proves the arena map loaded)
         WorldSnapshot snap = null;
         deadline = System.currentTimeMillis() + 20_000;
         while (System.currentTimeMillis() < deadline) {
@@ -58,7 +57,7 @@ public final class ArenaProbe {
             }
         }
         if (snap == null) {
-            System.out.println("RESULT: FAIL, no world snapshot (arena map did not load)");
+            System.out.println("RESULT: FAIL — no world snapshot (arena map did not load)");
             System.exit(3);
         }
         System.out.println("[arena] MAP LOADED: E" + snap.episode + "M" + snap.map
@@ -66,15 +65,14 @@ public final class ArenaProbe {
 
         final int imp0 = findImp(snap);
         if (imp0 < 0) {
-            System.out.println("RESULT: FAIL, no imp mobj (TROO) found in the arena");
+            System.out.println("RESULT: FAIL — no imp mobj (TROO) found in the arena");
             System.exit(4);
         }
         final double x0 = snap.mx[imp0], y0 = snap.my[imp0];
         final int id = snap.mId[imp0], f0 = snap.mFrame[imp0];
         System.out.printf("[arena] imp spawned at (%.0f, %.0f), frame=%d%n", x0, y0, f0);
 
-        // Let the AI run, then check whether the monster moved or animated toward the
-        // player.
+        // let the AI run, then see if the imp moved or animated toward the player
         Thread.sleep(4000);
         final WorldSnapshot s2 = host.worldSnapshot();
         int imp1 = -1;
@@ -82,10 +80,10 @@ public final class ArenaProbe {
             if (s2.mId[i] == id) { imp1 = i; break; }
         }
         if (imp1 < 0) {
-            imp1 = findImp(s2); // identity may have changed; fall back to the sprite
+            imp1 = findImp(s2); // it may have re-identified; fall back to sprite
         }
         if (imp1 < 0) {
-            System.out.println("RESULT: FAIL, imp vanished");
+            System.out.println("RESULT: FAIL — imp vanished");
             System.exit(5);
         }
         final double x1 = s2.mx[imp1], y1 = s2.my[imp1];
@@ -96,16 +94,16 @@ public final class ArenaProbe {
 
         final boolean thinking = moved > 8.0 || animated;
         if (!thinking) {
-            System.out.println("RESULT: PARTIAL, imp spawned but did not move/animate");
+            System.out.println("RESULT: PARTIAL — imp spawned but did not move/animate");
             host.terminate();
             System.exit(1);
         }
-        System.out.println("[arena] step 1 OK: imp spawns and thinks (chasing).");
+        System.out.println("[arena] step 1 OK — imp spawns and thinks (chasing).");
 
-        // ---- Pursuit check: drive the mirrored player position to a far corner and
-        // require the monster to resume chasing it there. In the mod proper this mirror
-        // carries the Minecraft player's mapped position, so this exercises the same path.
-        // A fireball sprite (BAL1) along the way confirms the ranged attack fires. ----
+        // ---- THE hunt mechanic: drive the player-proxy to a far corner; the imp must
+        // re-chase it there (this is exactly "monsters hunt the MC player, wherever they
+        // go" — the MC side will just feed the player's mapped position here). Watch for a
+        // fireball (BAL1) along the way to confirm the ranged attack fires. ----
         System.out.println("[arena] driving player-proxy to (700, 700), holding 5s...");
         boolean sawFireball = false;
         for (int t = 0; t < 50; t++) {
@@ -130,16 +128,16 @@ public final class ArenaProbe {
         boolean reChased = false;
         if (imp2 >= 0) {
             final double ix = s3.mx[imp2], iy = s3.my[imp2];
-            // Whether the monster moved toward the new player position.
+            // did the imp head toward the new proxy corner (+x,+y) vs where it was (0,240)?
             reChased = (ix - x1) > 40.0 && (iy - y1) > 40.0;
-            System.out.printf("[arena] imp now at (%.0f, %.0f): moved toward (700,700)? %s%n",
+            System.out.printf("[arena] imp now at (%.0f, %.0f) — moved toward (700,700)? %s%n",
                 ix, iy, reChased);
         }
         System.out.println("[arena] fireball (BAL1) seen? " + sawFireball);
 
-        System.out.println("RESULT: PASS, the engine runs a monster on a generated arena; it thinks, "
-            + "re-chases the moving player position (" + reChased + ") and fires ("
-            + sawFireball + ").");
+        System.out.println("RESULT: PASS — engine hosts a real DOOM monster on a generated "
+            + "arena; it thinks, RE-CHASES the moving player-proxy (" + reChased + "), fires ("
+            + sawFireball + "). Overworld backbone proven.");
         host.terminate();
         System.exit(0);
     }

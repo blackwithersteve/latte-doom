@@ -10,18 +10,17 @@ import java.nio.file.Path;
 import java.util.List;
 
 /**
- * Boots the engine without Minecraft and dumps demo frames as PNGs, exercising WAD loading,
- * the renderer, frame publishing, input injection and freeze/resume.
+ * Boots the real DOOM engine WITHOUT Minecraft and dumps title/demo frames as
+ * PNGs, proving the embedded bridge works end to end: WAD loading, the indexed
+ * renderer, frame publishing and input injection (ESC opens the menu mid-demo).
  *
- * <p>{@code ./gradlew doomSmoke -Pwad=...}, or the {@code DOOM_WAD} environment variable, or
- * {@code DOOM.WAD} in the working directory.
+ * Run with: gradlew doomSmoke
  */
 public final class HeadlessSmoke {
 
     public static void main(String[] args) throws Exception {
-        final String env = System.getenv("DOOM_WAD");
-        final Path iwad = Path.of(args.length > 0 && !args[0].isEmpty() ? args[0]
-            : (env != null && !env.isEmpty() ? env : "DOOM.WAD"));
+        final Path iwad = Path.of(args.length > 0 ? args[0]
+            : "DOOM.WAD");
         final Path frames = Path.of("frames");
         Files.createDirectories(frames);
 
@@ -68,9 +67,8 @@ public final class HeadlessSmoke {
             + " (want equal-ish), resumed -> " + resumed + " (want bigger)");
         final boolean freezeOk = (stillFrozen - frozenAt) <= 1 && resumed > stillFrozen;
 
-        // ---- Snapshot check. The title demo is real gameplay (recorded tics in a real
-        // level), so once it starts the snapshot must show a level, moving player
-        // coordinates and map objects. ----
+        // ---- M1: WorldSnapshot. The title demo IS gameplay (recorded tics in a real level),
+        // so once it starts we must see a level, moving player coordinates, and mobjs.
         System.out.println("[smoke] waiting for a world snapshot (title demo)...");
         final long snapDeadline = System.currentTimeMillis() + 30_000;
         com.blackwithersteve.lattedoom.engine.WorldSnapshot snap = null;
@@ -88,7 +86,7 @@ public final class HeadlessSmoke {
                 Thread.sleep(1000);
                 final com.blackwithersteve.lattedoom.engine.WorldSnapshot ws = host.worldSnapshot();
                 if (ws == null) {
-                    break; // demo ended mid-sample; evaluate the samples collected so far
+                    break; // demo ended mid-sample; judge on what we saw
                 }
                 travelled += Math.hypot(ws.px - lastX, ws.py - lastY);
                 lastX = ws.px;

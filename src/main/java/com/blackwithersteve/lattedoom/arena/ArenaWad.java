@@ -6,13 +6,14 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Builds an arena map as an in-memory PWAD: one square sector, a player-1 start and any
- * number of monsters. The engine will not run monster AI without a real map, and this is
- * the smallest one it accepts.
+ * Builds the OVERWORLD ARENA as an in-memory PWAD: one flat square sector (the map the
+ * engine needs so it can run REAL DOOM monsters), with a player-1 start and any number of
+ * monster things. It is ORIGINAL geometry the mod generates — zero id content, legal to
+ * ship (LEGAL.md); the monsters themselves render/behave from the user's own WAD.
  *
- * <p>A single subsector with no BSP nodes and an empty blockmap, which the Boom loader
- * permits and rebuilds, so no BSP has to be constructed. Overrides E1M1. The geometry is
- * generated here and holds no id Software content, so writing it to disk is fine.
+ * The map is a "trivial map" in Boom terms: ONE subsector, ZERO BSP nodes (BoomLevelLoader
+ * explicitly allows this), and an EMPTY blockmap (the loader rebuilds it). So there is no
+ * hand-authored BSP — the risky part is gone. Overrides E1M1 (loaded via -warp 1 1).
  */
 public final class ArenaWad {
 
@@ -77,9 +78,9 @@ public final class ArenaWad {
         le16(ssectors, 4);            // seg count
         le16(ssectors, 0);            // first seg
 
-        // ---- NODES: one degenerate node whose two children are both subsector 0. An
-        // empty NODES lump underflows the ZDoom/DeePBSP node-version probes, so a real
-        // node is emitted; R_PointInSubsector walks it and lands on subsector 0. ----
+        // ---- NODES: ONE degenerate node whose BOTH children are subsector 0. (An empty
+        // NODES lump underflows the ZDoom/DeePBSP node-version probes, so we give a real
+        // node; R_PointInSubsector walks it either way and lands on subsector 0.) ----
         final ByteArrayOutputStream nodesOut = new ByteArrayOutputStream();
         le16(nodesOut, 0);            // partition x
         le16(nodesOut, -H);           // partition y

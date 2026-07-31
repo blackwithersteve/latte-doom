@@ -16,9 +16,10 @@ import net.minecraft.resources.Identifier;
 import org.lwjgl.glfw.GLFW;
 
 /**
- * Diagnostic view of the engine's framebuffer at 4:3, cursor captured, all keys forwarded
- * except grave. Not used in normal play, where the level is world geometry and the menus are
- * Minecraft screens.
+ * The DOOM display: a fullscreen-ish 4:3 view of the engine's framebuffer,
+ * cursor captured, every key forwarded into the engine — except grave (`),
+ * which returns to Minecraft. Closing the screen freezes the engine at the
+ * next frame; reopening resumes exactly where you left it.
  */
 public final class LatteDoomScreen extends Screen {
 
@@ -31,18 +32,17 @@ public final class LatteDoomScreen extends Screen {
 
     private final DoomHost host;
     private final LatteDoomConfig config;
-    /** Automatically opened intermission or finale view, showing the engine's own tally.
-     * It closes itself as soon as the next level starts, at which point the player is
-     * delivered to that map's start. */
+    /** Auto-opened intermission/finale view: shows the engine's own WI tally (kills/items/
+     * secrets, par time, "entering...") and closes ITSELF the moment the next level starts —
+     * the level-advance delivery then places the player at the new map's start. */
     private final boolean autoIntermission;
-    /** Menu-only view used while a level is standing: it opens with the engine's own
-     * menu already showing and closes once the player leaves that menu, so opening the menu
-     * never switches the player into the flat framebuffer view of the game. */
+    /** In-level "menu only" view (the boot key must never dump the player into playing
+     * flat-screen DOOM — the WORLD is the renderer): opens with the engine's own Esc menu
+     * already up, and closes itself once the player backs out of the menu. */
     private final boolean menuOnly;
     private int escReleaseIn;   // synthetic Esc key-up countdown (held across a tic boundary)
-    private int menuCloseGrace; // ticks the menu must stay closed before this screen closes
-                                // itself, which gives a New Game chosen in the menu time to
-                                // load its map first
+    private int menuCloseGrace; // ticks !menuactive must persist before self-close (lets a
+                                // menu New Game's map switch land first — the warp-in lane)
 
     private double lastMouseX = Double.NaN;
     private double lastMouseY = Double.NaN;
@@ -67,8 +67,8 @@ public final class LatteDoomScreen extends Screen {
 
     @Override
     public void tick() {
-        // The automatic view exists only for the interval between levels: once the next
-        // map is live the player is handed back to the world and delivered to its start.
+        // the auto view exists only for the between-levels stretch: the next map going
+        // live (GS_LEVEL) hands the player back to the world (delivery to the new start)
         if (autoIntermission && host != null && host.gamestateKind() == 0) {
             onClose();
             return;
@@ -77,8 +77,8 @@ public final class LatteDoomScreen extends Screen {
             host.postKey(ScanCode.SC_ESCAPE, false); // finish the synthetic menu-open press
         }
         if (menuOnly && host != null && escReleaseIn == 0) {
-            // Leaving the menu returns to the world. The grace window gives a New Game
-            // chosen in the menu time to load its map first.
+            // back out of the menu = back to the world. The grace window lets a New Game
+            // picked in the menu load its map first (the warp-in lane closes us instead).
             if (host.isMenuActive()) {
                 menuCloseGrace = 5;
             } else if (--menuCloseGrace <= 0) {
@@ -96,18 +96,18 @@ public final class LatteDoomScreen extends Screen {
 
     @Override
     public void added() {
-        // Capture the pointer as a first-person shooter would: Minecraft releases it when
-        // this screen opens, while the engine needs raw deltas and no visible cursor.
+        // Capture the pointer FPS-style. Minecraft released it when this screen
+        // opened; DOOM wants raw deltas and no visible cursor.
         GLFW.glfwSetInputMode(Minecraft.getInstance().getWindow().handle(),
             GLFW.GLFW_CURSOR, GLFW.GLFW_CURSOR_DISABLED);
         lastMouseX = Double.NaN;
         lastMouseY = Double.NaN;
         if (menuOnly && host != null) {
-            // Open directly into the engine's menu. The key must be held across a tic
-            // boundary for G_Responder to observe it, as with the weapon-slot keys.
+            // open straight INTO the engine's own menu (held across a tic boundary so
+            // G_Responder actually sees it — same trick as the weapon-slot keys)
             host.postKey(ScanCode.SC_ESCAPE, true);
             escReleaseIn = 2;
-            menuCloseGrace = 10; // the engine has not observed the Esc press yet
+            menuCloseGrace = 10; // don't judge "menu closed" before the engine even saw Esc
         }
     }
 
@@ -115,10 +115,10 @@ public final class LatteDoomScreen extends Screen {
     public void removed() {
         GLFW.glfwSetInputMode(Minecraft.getInstance().getWindow().handle(),
             GLFW.GLFW_CURSOR, GLFW.GLFW_CURSOR_NORMAL);
-        // Closing this screen never freezes the world: the level keeps running while the
-        // player returns to Minecraft, and only the explicit watch command pauses the
-        // engine. Any keys the engine still believes are held must be released here, or the
-        // player keeps moving in the engine's view of the world.
+        // The world never auto-freezes — closing the screen just returns you to
+        // Minecraft while the level keeps living around you. Only the explicit
+        // /doomwatch pauses the engine. But do
+        // release any keys DOOM still thinks are held, or the marine walks forever.
         if (host != null) {
             host.cancelKeys();
         }
@@ -174,7 +174,7 @@ public final class LatteDoomScreen extends Screen {
             return;
         }
 
-        // The engine renders 16:10 pixels that period displays stretched to 4:3.
+        // DOOM renders 16:10 pixels that a CRT stretched to 4:3 — honour that.
         int destH = this.height;
         int destW = destH * 4 / 3;
         if (destW > this.width) {
@@ -187,7 +187,7 @@ public final class LatteDoomScreen extends Screen {
             destW, destH, texW, texH, texW, texH);
     }
 
-    /** Uploads the newest engine frame into the texture, skipping unchanged frames. */
+    /** Pull the newest engine frame into the texture; skip if nothing new. */
     private void uploadLatestFrame() {
         final int w = host.width(), h = host.height();
         if (texture == null || texW != w || texH != h) {
@@ -224,9 +224,8 @@ public final class LatteDoomScreen extends Screen {
 
     @Override
     public boolean keyPressed(KeyEvent event) {
-        // Either grave or the configured menu key closes the screen. Grave is a dead key
-        // on several keyboard layouts, so the rebindable key is the layout-independent way
-        // out.
+        // grave OR the boot keybind itself closes (grave is a dead key on German QWERTZ —
+        // the rebindable boot key is the layout-safe way out)
         if (event.key() == GLFW.GLFW_KEY_GRAVE_ACCENT || LatteDoomClient.isBootKey(event)) {
             onClose();
             return true;

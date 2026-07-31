@@ -9,22 +9,24 @@ import net.minecraft.network.chat.Component;
 import org.lwjgl.glfw.GLFW;
 
 /**
- * Death overlay for a transformed player. Draws a red fade over the world; no text and no
- * buttons. Fire or use respawns after a 10-tick delay. The level restart is handled by the
- * death path in {@code LatteWorld}; {@code MarineDeathMixin} suppresses the Minecraft death
- * message and the item drop.
+ * A transformed player's death, DOOM's way: no "You Died!" text, no buttons.
+ * The world stays visible (Minecraft's own death camera keels over — the fallen view),
+ * DOOM's red death fade rolls in like the software renderer's damage palettes, and FIRE
+ * or USE rises you again — the respawn feeds the map-restart lane: the level restarts
+ * fresh and you're reborn at its start with fist + pistol. No death message reaches chat
+ * (MarineDeathMixin) and the marine's inventory never scatters.
  */
 public final class DoomDeathScreen extends Screen {
 
     private int ticks;
 
     public DoomDeathScreen() {
-        super(Component.literal("Latte Doom: death"));
+        super(Component.literal("Latte Doom — death"));
     }
 
     @Override
     public boolean isPauseScreen() {
-        return false; // must not pause: the engine keeps ticking while the player is dead
+        return false; // the engine and the world keep living around your corpse, like 1993
     }
 
     @Override
@@ -37,20 +39,21 @@ public final class DoomDeathScreen extends Screen {
         ticks++;
         final Minecraft mc = Minecraft.getInstance();
         if (mc.player == null || !mc.player.isDeadOrDying()) {
-            onClose();
+            onClose(); // respawned (or gone) — the world takes over again
         }
     }
 
     @Override
     public void extractBackground(GuiGraphicsExtractor g, int mouseX, int mouseY, float delta) {
-        // Alpha ramps to 0xB4 over ~1.5 s. Not opaque, so the world stays readable.
+        // DOOM's death fade: the software renderer stepped the red damage palettes up as
+        // you fell. Ramp alpha over ~1.5s to a heavy-but-not-opaque red, world beneath.
         final int alpha = Math.min(0xB4, ticks * 12);
         g.fill(0, 0, this.width, this.height, (alpha << 24) | 0xFF0000);
     }
 
     @Override
     public boolean keyPressed(KeyEvent event) {
-        // Use and fire both respawn.
+        // DOOM's own contract: use/fire = rise again. Space, E (use), Enter all count.
         if (event.key() == GLFW.GLFW_KEY_SPACE || event.key() == GLFW.GLFW_KEY_ENTER
             || event.key() == GLFW.GLFW_KEY_KP_ENTER || event.key() == GLFW.GLFW_KEY_E) {
             respawn();
@@ -60,14 +63,14 @@ public final class DoomDeathScreen extends Screen {
 
     @Override
     public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
-        respawn();
+        respawn(); // the trigger finger works too
         return true;
     }
 
     private void respawn() {
         final Minecraft mc = Minecraft.getInstance();
         if (ticks < 10 || mc.player == null) {
-            return; // 10-tick guard so the killing-blow click does not skip the screen
+            return; // half a second of lying there — no accidental instant skips
         }
         mc.player.respawn();
     }

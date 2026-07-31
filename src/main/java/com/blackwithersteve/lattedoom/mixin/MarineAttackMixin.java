@@ -9,11 +9,10 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
- * While transformed, the left mouse button is the DOOM trigger and must neither mine
- * blocks nor perform a vanilla attack. Minecraft consumes the click before the mod's own
- * tick can observe it, so the cancelled {@code startAttack} forwards the press to the
- * weapon layer directly: sampling the key state at 20 Hz drops clicks shorter than one
- * tick.
+ * In marine form the left mouse button IS the DOOM trigger — it must never mine blocks
+ * or vanilla-punch. Vanilla consumes the click before our tick can see it, so the
+ * cancelled startAttack also forwards the tap to the suit (quick clicks were falling
+ * between 20Hz key samples: "the doommarine cant punch by clicking").
  */
 @Mixin(Minecraft.class)
 public abstract class MarineAttackMixin {
@@ -25,8 +24,8 @@ public abstract class MarineAttackMixin {
             cir.setReturnValue(false);
             return;
         }
-        // Untransformed player: when no Minecraft entity is in reach the swing may land on
-        // a DOOM thing instead, so Minecraft weapons can damage monsters.
+        // plain Steve: if no Minecraft entity is in reach, the swing may land on a DOOM
+        // thing instead — Minecraft fists/swords hurt demons (the reverse translation)
         com.blackwithersteve.lattedoom.play.MinecraftCombat.meleeAttack((Minecraft) (Object) this);
     }
 

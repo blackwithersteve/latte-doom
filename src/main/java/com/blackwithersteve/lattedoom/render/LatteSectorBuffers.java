@@ -29,38 +29,37 @@ import java.util.Optional;
 import java.util.OptionalDouble;
 
 /**
- * Persistent geometry: an alternative to re-emitting every sector vertex each frame. Each
- * sector's mesh is baked once into a {@link GpuBuffer} that lives for the lifetime of the
- * map and is redrawn each frame, in the same way Minecraft renders its own chunk sections.
- * Only sectors that move, such as doors and lifts, rebuild their contents.
+ * S2 — PERSISTENT GEOMETRY. Instead of re-emitting every sector vertex every frame (the
+ * FPS killer), each sector's mesh is baked ONCE into a {@link GpuBuffer} that lives for the
+ * map's lifetime and is just redrawn each frame — exactly how Minecraft renders its own
+ * chunk sections. Only the handful of moving sectors (doors/lifts) rebuild their bytes.
  *
- * <p>Sector light is baked into the vertex colour, which matches the per-frame renderer
- * exactly and makes no assumptions about shaders; a sector whose light level changed is
- * rebaked along with the moving ones. Animated flats and walls need no rebake, because the
- * current frame's texture is bound at draw time against the same buffer and every frame of
- * an animation shares the same dimensions, leaving the texture coordinates valid.
+ * <p>Engine light is baked into the vertex colour (Option A — matches the current renderer
+ * exactly, no shader assumptions); a sector whose light changed is re-baked alongside the
+ * movers. Animated flats/walls need NO rebake: the current-frame texture is bound at draw
+ * time against the same buffer (every anim frame shares dimensions, so the UVs stay valid).
  *
- * <p>All GPU calls run on the render thread: buffers are built during the client tick and
- * drawn from the level renderer's own pass. The path is opt-in through the
- * {@code lattedoom.persist} system property, with the per-frame renderer as the default.
+ * <p>All GPU calls run on the render thread (build in the client-tick GL slot, draw from the
+ * LevelRenderer.render TAIL mixin). This whole path is gated behind {@code /persist on} — the
+ * classic per-frame renderer stays the safe default until this is proven in-game.
  */
 public final class LatteSectorBuffers {
 
     private static final int FULLBRIGHT = 0xF000F0;
 
-    /** Opt-in switch for the persistent-buffer path; when false, the per-frame renderer
-     * draws instead. Set with {@code -Dlattedoom.persist=true}. */
+    /** S2 opt-in. OFF = the proven per-frame renderer draws (safe default). `/persist on`
+     * flips to the persistent-GPU-buffer path. Kept a toggle until it's confirmed in-game. */
     public static volatile boolean ENABLED =
         "true".equalsIgnoreCase(System.getProperty("lattedoom.persist"));
 
-    /** Sector index to base texture key to baked buffer, mirroring the mesh groups. */
+    /** sector -> (base texture key -> baked buffer). Mirrors LatteWorld.groups(). */
     private static final Map<Integer, Map<String, SectorBuf>> BUFFERS = new HashMap<>();
     private static final Map<String, Identifier> IDS = new HashMap<>();
 
     private static VertexFormat fmt;
     private static RenderPipeline pipeline;
 
-    /** One sector-texture batch's persistent vertex buffer. All geometry is quads. */
+    /** A sector-texture batch's persistent vertex buffer. Geometry is 100% quads. */
     private record SectorBuf(GpuBuffer vbo, int vertexCount) {
         int indexCount() {
             return vertexCount / 4 * 6;
@@ -82,15 +81,14 @@ public final class LatteSectorBuffers {
     }
 
     private static Identifier dummyId() {
-        // Any registered texture resolves the shared entity pipeline and vertex format.
+        // any registered doom texture works to resolve the shared entity pipeline/format
         return Identifier.fromNamespaceAndPath("lattedoom", "textures/doom/walls/startan3.png");
     }
 
     // ---------------------------------------------------------------- bake
 
-    /** Bakes one sector-texture batch into a persistent GPU buffer, folding the sector's
-     * current light level into the vertex colour. Input vertices carry position, texture
-     * coordinates and a sector index, as produced by the mesh builder. */
+    /** Bake one sector-texture batch (LatteMesh float[]: x,y,z,u,v,sectorIdx per vertex) into
+     * a persistent GPU buffer, with the sector's current engine light folded into vertex colour. */
     private static SectorBuf bake(float[] v, String debugName) {
         final int verts = v.length / 6;
         try (ByteBufferBuilder bbb = new ByteBufferBuilder(Math.max(64, verts * fmt().getVertexSize()))) {
@@ -113,7 +111,7 @@ public final class LatteSectorBuffers {
         }
     }
 
-    /** Builds every sector's buffers from scratch; called once when a map is loaded. */
+    /** Build every sector's buffers from scratch (called once when the map loads). */
     public static void buildAll(Map<Integer, Map<String, float[]>> groups) {
         dispose();
         if (groups == null) {
@@ -124,9 +122,8 @@ public final class LatteSectorBuffers {
         }
     }
 
-    /** Rebuilds one sector's buffers, closing the previous GPU buffers first. Moving
-     * sectors are rebuilt every frame, and sectors whose light level or height changed are
-     * rebuilt when that change is detected. */
+    /** Rebuild a single sector's buffers (moving sectors each frame; relit/height-changed
+     * sectors in syncHeights). Closes the old GPU buffers first. */
     public static void rebuild(int sector, Map<String, float[]> group) {
         final Map<String, SectorBuf> old = BUFFERS.remove(sector);
         if (old != null) {
@@ -146,7 +143,7 @@ public final class LatteSectorBuffers {
         BUFFERS.put(sector, made);
     }
 
-    /** Frees every GPU buffer, on level unload. */
+    /** Free every GPU buffer (level unload). */
     public static void dispose() {
         for (Map<String, SectorBuf> m : BUFFERS.values()) {
             for (SectorBuf b : m.values()) {
@@ -163,10 +160,9 @@ public final class LatteSectorBuffers {
     // ---------------------------------------------------------------- draw
 
     /**
-     * Draws every visible sector's persistent buffers in a single render pass, composited
-     * over the already-rendered world by loading its colour and depth without clearing.
-     * {@code mv} is the camera-relative model-view matrix: the captured camera view
-     * multiplied by a translation from the camera to the level origin.
+     * Draw every (visible) sector's persistent buffers in ONE render pass, composited over
+     * the already-rendered world (load color+depth, no clear). {@code mv} is the full
+     * camera-relative model-view (captured camera view * translate(origin - cam)).
      */
     public static void draw(Matrix4f mv, int tic, Frustum frustum,
                             Map<Integer, double[]> bounds, java.util.Set<Integer> moving,

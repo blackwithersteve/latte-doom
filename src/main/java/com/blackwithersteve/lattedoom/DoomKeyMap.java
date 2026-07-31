@@ -7,9 +7,12 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * GLFW key codes to engine scan codes. The full alphabet is mapped because cheats are typed
- * rather than bound. Grave is deliberately absent: it returns control to Minecraft and must
- * never reach the engine.
+ * GLFW key codes -> Mocha Doom ScanCodes. Everything DOOM can possibly want:
+ * movement, fire/use, weapons 1-8, function keys, automap keys, menu navigation,
+ * and the full alphabet (cheat codes are typed, after all — iddqd needs to work).
+ *
+ * GLFW_KEY_GRAVE_ACCENT is deliberately absent: grave is the "leave DOOM, back to
+ * Minecraft" key and never reaches the engine.
  */
 public final class DoomKeyMap {
 
@@ -131,14 +134,13 @@ public final class DoomKeyMap {
         MAP.put(glfwKey, sc);
     }
 
-    /** @return the engine scan code for this GLFW key, or null if the engine has none. */
+    /** @return the DOOM scancode for this GLFW key, or null if DOOM doesn't know it. */
     public static ScanCode get(int glfwKey) {
         return MAP.get(glfwKey);
     }
 
-    /** The scan code for a letter or digit, used when a cheat is typed into the engine one
-     * character at a time. Null for anything else, which the caller skips rather than
-     * mistypes. */
+    /** The scancode for a letter or digit, for typing a cheat. Null for anything else,
+     * which the caller skips rather than mistypes. */
     public static ScanCode forChar(char c) {
         if (c >= 'a' && c <= 'z') {
             return MAP.get(GLFW.GLFW_KEY_A + (c - 'a'));

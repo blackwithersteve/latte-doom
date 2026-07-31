@@ -6,32 +6,26 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Triangulates sector floors and ceilings as polygons with holes, taken directly from each
- * sector's linedef boundary loops and triangulated by the vendored {@link Earcut} port.
- * Walls are later built from the same linedef vertices these loops are made of, so a floor
- * rim and the base of its wall share vertices by construction and no gaps can appear
- * between them. The BSP tree is not involved, so a map's NODES lump may be absent or
- * malformed without affecting the result.
+ * GZDoom-style sector triangulation: each sector's floor/ceiling becomes polygons-with-holes,
+ * triangulated directly from its linedef boundary loops by the vendored mapbox {@link Earcut}.
+ * Walls are later built from the SAME linedef vertices these loops are made of, so floor rim
+ * and wall base share vertices BY CONSTRUCTION — the class of hairline gaps that
+ * BSP-fragment gluing produces cannot exist here. No BSP involvement; NODES can be garbage.
  *
- * <p>This class handles the map-specific parts:
- * <ol>
- *   <li>Tracing boundary loops from directed linedef edges, where the front side runs from
- *       v1 to v2 and the back side from v2 to v1, keeping the sector interior on the right.
- *       Self-referencing lines are skipped, and taking the sharpest right turn at a junction
- *       vertex splits figure-of-eight contacts into simple loops.</li>
- *   <li>Classifying loops by orientation: with the interior on the right, outer loops are
- *       clockwise, giving a negative shoelace area, and holes are counter-clockwise.</li>
- *   <li>Assigning each hole to the smallest outer loop that contains it.</li>
- * </ol>
- * Bridging, clipping, degenerate handling and splitting are all performed by Earcut.
+ * This class owns the DOOM-specific parts: (1) tracing boundary loops from directed linedef
+ * edges (front side = v1->v2, back = v2->v1; interior on the RIGHT; self-referencing lines
+ * skipped; sharpest-right turn at junction vertices splits figure-8 contacts), (2) classifying
+ * loops by ORIENTATION — interior-on-right makes outer loops clockwise (negative shoelace) and
+ * hole loops counter-clockwise — and (3) assigning each hole to its smallest containing outer.
+ * Everything hard (bridging, clipping, degenerate cures, splits) is Earcut's, battle-tested.
  */
 public final class SectorTriangulator {
 
     /**
      * Triangles per sector, packed {x1,y1, x2,y2, x3,y3}* in DOOM units, CCW.
-     * {@code fallback[s]} marks sectors whose boundary is unclosed in the map data itself,
-     * which occurs in several stock levels. Those sectors are triangulated from BSP
-     * subsector fragments instead, as other source ports do.
+     * fallback[s] marks sectors whose boundary is BROKEN IN THE MAP DATA (unclosed sector,
+     * a real vanilla mapping error — E1M3 s7, E3M2 s21/22, E3M8 s1): those triangulate from
+     * BSP subsector fragments instead, exactly like every real port special-cases them.
      */
     public record Result(double[][] sectorTris, boolean[] fallback, List<String> issues) {}
 
@@ -47,10 +41,10 @@ public final class SectorTriangulator {
                 issues.add("sector " + s + ": EXCEPTION " + e);
                 out[s] = null;
             }
-            if (out[s] == null) { // unclosed boundary: the map itself is broken here
+            if (out[s] == null) { // unclosed boundary — the map itself is broken here
                 out[s] = bspFallback(map, s);
                 fallback[s] = true;
-                issues.add("warn: sector " + s + " has an unclosed boundary (map defect): BSP-fragment fallback");
+                issues.add("warn: sector " + s + " has an unclosed boundary (map defect) — BSP-fragment fallback");
             }
         }
         return new Result(out, fallback, issues);
@@ -94,18 +88,17 @@ public final class SectorTriangulator {
 
     // ------------------------------------------------------------ per sector
 
-    /** Returns null when the boundary is unclosed (map defect): caller uses the BSP fallback. */
+    /** Returns null when the boundary is unclosed (map defect) — caller uses the BSP fallback. */
     private static double[] triangulateSector(DoomMap map, int s, List<String> issues) {
         final List<double[][]> loops = buildLoops(map, s);
         if (loops == null) {
             return null; // unclosed boundary
         }
         if (loops.isEmpty()) {
-            return new double[0]; // sector referenced by no lines: nothing to draw
+            return new double[0]; // sector referenced by no lines: genuinely nothing to draw
         }
-        // Orientation is sufficient to classify loops: tracing with the interior on the
-        // right makes outer loops clockwise, with a negative shoelace area, and holes
-        // counter-clockwise. Parity ray casting is not needed and is less robust.
+        // Orientation classifies: traced interior-on-right => outers CW (shoelace < 0),
+        // holes CCW (> 0). No parity ray-casting — the fragility that filled pillars.
         final List<double[][]> outers = new ArrayList<>();
         final List<double[][]> holes = new ArrayList<>();
         for (double[][] loop : loops) {
@@ -118,7 +111,7 @@ public final class SectorTriangulator {
         if (outers.isEmpty()) {
             return null; // hole loops with no outer: the boundary data is broken too
         }
-        // Assign each hole to the smallest outer that contains it
+        // assign each hole to the smallest outer that contains it
         final Map<Integer, List<double[][]>> byOuter = new HashMap<>();
         for (double[][] h : holes) {
             int best = -1;
@@ -199,10 +192,9 @@ public final class SectorTriangulator {
     // ------------------------------------------------------------ boundary loops
 
     /**
-     * Directed boundary edges of a sector; walking them keeps the sector's interior on the
-     * right, since a linedef's front side faces right of the v1 to v2 direction. At a
-     * junction vertex the sharpest right turn follows the interior, which splits
-     * figure-of-eight contacts into simple loops.
+     * Directed boundary edges of a sector: walking them keeps the sector on the RIGHT
+     * (DOOM's front side faces right of v1->v2). At a junction vertex the sharpest
+     * right turn hugs the sector interior, splitting figure-8 contacts into simple loops.
      */
     private static List<double[][]> buildLoops(DoomMap map, int s) {
         final List<double[]> edges = new ArrayList<>(); // {x1,y1,x2,y2}
@@ -210,7 +202,7 @@ public final class SectorTriangulator {
             final boolean front = l.frontSector() == s;
             final boolean back = l.backSector() == s;
             if (front == back) {
-                continue; // another sector's line, or self-referencing: no boundary here
+                continue; // not ours, or self-referencing (deep-water hack) — no boundary
             }
             if (front) {
                 edges.add(new double[]{l.x1(), l.y1(), l.x2(), l.y2()});
@@ -264,14 +256,14 @@ public final class SectorTriangulator {
                     }
                 }
                 if (chosen < 0) {
-                    break; // dead end: unclosed sector (mapping error); handled below
+                    break; // dead end — unclosed sector (mapping error); handled below
                 }
                 cur = chosen;
             }
             if (closed && loop.size() >= 3) {
                 loops.add(loop.toArray(new double[0][]));
             } else if (!closed) {
-                return null; // unclosed boundary: the map data is broken, BSP fallback
+                return null; // unclosed boundary: the map data is broken — BSP fallback
             }
         }
         return loops;

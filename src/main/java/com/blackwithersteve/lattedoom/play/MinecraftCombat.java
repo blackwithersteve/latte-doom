@@ -14,15 +14,12 @@ import java.util.HashSet;
 import java.util.Set;
 
 /**
- * Translates Minecraft attacks into damage the engine understands, the counterpart to
- * {@link DoomCombat}.
- *
- * <p>An untransformed player's melee swing and any flying arrow are tested against the
- * shootable map objects in the current snapshot. Hits are sent to the client running the
- * engine, where {@code P_DamageMobj} is applied with the attacker's own body as the
- * source, so monsters retaliate against the correct player, barrels explode and all damage
- * dice remain the engine's. Minecraft damage is converted at five DOOM hit points per
- * point of damage, the inverse of the health conversion used elsewhere.
+ * THE OTHER HALF of the combat translation: Minecraft attacks become damage the ENGINE
+ * understands. A plain Steve's fist/sword swing and any flying arrow are tested against
+ * the snapshot's shootable mobjs; hits ship to the level owner's engine (DoomHitC2S)
+ * where P_DamageMobj runs with the attacker's possessed body as the source — demons
+ * fight back at whoever hit them, barrels explode, dice are the engine's own.
+ * Scale: MC damage x5 = DOOM hit points (the inverse of the hearts law).
  */
 public final class MinecraftCombat {
 
@@ -30,13 +27,12 @@ public final class MinecraftCombat {
     private static final Set<Integer> arrowsSpent = new HashSet<>();
 
     /**
-     * DOOM hit points awarded per point of Minecraft attack damage for a melee swing
-     * against a monster, used when no configuration has loaded. The strict inverse of the
-     * health conversion would be 5.0; this higher value is a deliberate balance choice, so
-     * that Minecraft melee is competitive with DOOM weapons. Because attack damage already
-     * encodes the weapon tier, every weapon scales from it: at this default a wooden or
-     * golden sword deals 72, stone 90, iron 108, which kills an imp outright, diamond 126
-     * and netherite 144, with axes higher still.
+     * DOOM hit points per point of Minecraft ATTACK_DAMAGE for a melee swing vs demons
+     * (melee is tuned to hit HARD, tiered by weapon). The plain ÷5-hearts
+     * inverse would be 5.0; this bumps it so the iron sword is a real demon-killer, and
+     * because ATTACK_DAMAGE already encodes weapon tier, everything scales from there:
+     *   wood/gold 4→48 · stone 5→60 · IRON 6→72 (one-shots an imp) · diamond 7→84 ·
+     *   netherite 8→96 · axes higher still. Reference: iron at 72.
      */
     private static final double MELEE_DOOM_SCALE_DEFAULT = 18.0;
 
@@ -47,10 +43,9 @@ public final class MinecraftCombat {
     }
 
     /**
-     * Wakes the monsters within earshot of the player. The engine raises this itself
-     * whenever a DOOM weapon fires, so only Minecraft attacks, which happen outside the
-     * engine, have to announce themselves. Without it a level stays asleep around a player
-     * firing a bow across a room.
+     * Wakes the monsters that can hear the player. The engine raises this itself whenever a
+     * DOOM weapon fires, so only Minecraft attacks, which happen outside it, have to say so.
+     * Without it a level stays asleep around a player shooting a bow across a room.
      */
     public static void alertMonsters() {
         final var host = com.blackwithersteve.lattedoom.LatteDoomClient.host();
@@ -60,10 +55,9 @@ public final class MinecraftCombat {
     }
 
     /**
-     * Raises any gun-triggered line special the shot crosses, taking the nearest line
-     * first, as {@code P_LineAttack} does. Only DOOM weapons run through the engine's own
-     * attack code, so a Minecraft arrow or swing would otherwise pass straight through a
-     * shootable switch.
+     * Raises any gun-triggered special the shot crosses, taking the nearest line first, as
+     * P_LineAttack does. Only DOOM weapons run through the engine's own attack code, so a
+     * Minecraft arrow or swing would otherwise pass straight through a shootable switch.
      */
     public static void shootSpecials(Vec3 from, Vec3 dir, double rangeU) {
         final var host = com.blackwithersteve.lattedoom.LatteDoomClient.host();
@@ -107,8 +101,8 @@ public final class MinecraftCombat {
         return t >= 0 && t <= 1 && u >= 0 && u <= 1 ? t : -1;
     }
 
-    /** Handles an attack that hit no Minecraft entity by testing the DOOM map objects
-     * under the crosshair. Returns true if one of them took the hit. */
+    /** A plain-Steve attack click that hit no Minecraft entity: try the DOOM things
+     * under the crosshair. Returns true if a demon (or barrel) took the hit. */
     public static boolean meleeAttack(Minecraft mc) {
         final LocalPlayer p = mc.player;
         final WorldSnapshot s = snap();
@@ -122,8 +116,8 @@ public final class MinecraftCombat {
         final Vec3 dir = p.getLookAngle();
         final int target = rayMobj(s, eye, dir, MELEE_REACH_U);
         if (target < 0) {
-            // A swing that hits no monster can still reach a wall, and a shootable switch
-            // on that wall has to be raised. The noise carries either way.
+            // A swing that hits no monster can still hit a wall, and a shootable switch is
+            // exactly the case this was added for. The noise carries either way.
             alertMonsters();
             shootSpecials(eye, dir, MELEE_REACH_U);
             return false;
@@ -133,8 +127,8 @@ public final class MinecraftCombat {
         alertMonsters();
         shootSpecials(eye, dir, MELEE_REACH_U);
         // Clamped to the server's per-hit ceiling. An over-cap packet is rejected whole
-        // rather than trimmed, so without the clamp a high tier weapon under a strength
-        // effect would land for nothing at all.
+        // rather than trimmed, so a high tier weapon under a strength effect would land for
+        // nothing at all.
         final int doomHp = Math.max(1,
             Math.min(200, (int) Math.round(mcDamage * meleeScale())));
         LOGGER.info("MC->DOOM: melee hit mobj {} for {} hp", s.mId[target], doomHp);
@@ -148,7 +142,7 @@ public final class MinecraftCombat {
         if (mc.level == null || mc.player == null || s == null || LatteWorld.map() == null) {
             return;
         }
-        // Only test near the raised level, since all monsters are inside it.
+        // only bother near the raised level (the demons all live there)
         final AABB levelBox = new AABB(
             LatteWorld.doomToWorldX(-40000), 0, LatteWorld.doomToWorldZ(40000),
             LatteWorld.doomToWorldX(40000), 400, LatteWorld.doomToWorldZ(-40000));
@@ -169,9 +163,8 @@ public final class MinecraftCombat {
                     mcDamage * 5, e.getId());
                 continue;
             }
-            // Level geometry stops arrows as well: sample this tick's flight, treating a
-            // dip below a floor, a rise above a ceiling, or leaving every sector while
-            // inside the level as an impact.
+            // level GEOMETRY stops arrows too: sample this tick's flight — dipping under
+            // a floor, over a ceiling, or out of all sectors mid-level = a wall hit
             if (hitsGeometry(from, from.add(vel))) {
                 arrowsSpent.add(e.getId());
                 // An arrow striking a wall raises any gun-triggered special on it, the same
@@ -193,7 +186,7 @@ public final class MinecraftCombat {
         }
     }
 
-    /** Nearest shootable mobj along a world-space ray (cylinder test in doom space),
+    /** Nearest SHOOTABLE mobj along a world-space ray (cylinder test in doom space),
      * or -1. Range in map units. */
     private static int rayMobj(WorldSnapshot s, Vec3 from, Vec3 dir, double rangeU) {
         if (s.mShootable == null) {
@@ -209,9 +202,9 @@ public final class MinecraftCombat {
         if (dlen < 1.0e-6) {
             return -1;
         }
-        // Players' mirrored bodies are never targets here: the local player's own body
-        // sits at the ray origin, which would make punching thin air self-damaging, and
-        // other players are handled as Minecraft entities rather than engine objects.
+        // players' possessed bodies are never doom-punch targets: your OWN body sits at
+        // the ray origin (a joining player hurt themselves punching air), and OTHER
+        // players are Minecraft-combat targets, not engine things
         java.util.Set<Integer> possessed = null;
         if (s.rbMobjId != null) {
             possessed = new HashSet<>();
@@ -221,10 +214,9 @@ public final class MinecraftCombat {
         }
         int best = -1;
         double bestT = Double.MAX_VALUE;
-        // Aim at the drawn position rather than the newest engine one. Sprites are
-        // interpolated on the delayed render clock, so a moving target's engine position
-        // leads the body on screen by up to the render latency, and a swing aimed at what
-        // is drawn would otherwise miss.
+        // Aim at the drawn position, not the newest engine one. Sprites are interpolated on
+        // the delayed render clock, so a moving target's true position leads its body by up
+        // to the render latency, and a swing aimed at what is on screen misses entirely.
         final double[] at = new double[3];
         for (int i = 0; i < s.mobjCount; i++) {
             if (!s.mShootable[i] || (i == s.playerMobj && (LatteWorld.playMode() || s.remote))) {
@@ -233,7 +225,7 @@ public final class MinecraftCombat {
             if (possessed != null && possessed.contains(s.mId[i])) {
                 continue;
             }
-            // Closest approach of the horizontal ray to the object's column.
+            // closest approach of the 2D ray to the mobj column
             LatteWorld.thingDrawn(s, i, at);
             final double px = at[0] - ox, py = at[1] - oy;
             final double t = (px * dx + py * dy) / (dlen * dlen);
@@ -245,7 +237,7 @@ public final class MinecraftCombat {
             if (miss > s.mRadius[i] + 12.0) {
                 continue;
             }
-            // Vertical window: the eye height along the ray against the object's body.
+            // vertical window: eye height along the ray vs the thing's body column
             final double hAt = oh + dh * t;
             if (hAt < at[2] - 8.0 || hAt > at[2] + 88.0) {
                 continue;
@@ -258,7 +250,7 @@ public final class MinecraftCombat {
         return best;
     }
 
-    /** Whether this world-space segment crossed into the level's solid geometry. */
+    /** Did this world-space segment cross into the level's solid geometry? */
     private static boolean hitsGeometry(Vec3 from, Vec3 to) {
         final var map = LatteWorld.map();
         if (map == null) {

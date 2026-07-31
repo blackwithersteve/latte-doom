@@ -9,11 +9,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Properties;
-import java.util.stream.Stream;
 
 /**
- * Settings from {@code config/latte-doom/latte-doom.properties}. That folder doubles as the
- * engine's data directory, holding the IWAD, the engine's own config files and savegames.
+ * Tiny properties config in config/latte-doom/latte-doom.properties.
+ * The same folder is DOOM's data dir: IWAD, default.cfg, mochadoom.cfg and
+ * savegames all live there, like a proper source port install.
  */
 public final class LatteDoomConfig {
 
@@ -24,18 +24,35 @@ public final class LatteDoomConfig {
 
     public final Path dataDir;
     public Path iwadPath;             // may be null if nothing found
-    public boolean novert = true;     // the mouse turns only; it never walks the player
+    public boolean novert = true;     // mouse turns, but doesn't walk you forward
     public boolean pauseMinecraft = true;
-    /** The mod's own audio levels, 0 to 1, separate from Minecraft's sliders, where 1.0 is
-     * full volume. Persisted, and adjustable at runtime through the volume menu or the
-     * volume command. */
+    /** Dedicated DOOM audio levels (0..1), INDEPENDENT of Minecraft's own sliders — this is
+     * the "its own sliders" ask. 1.0 = full. Persisted; set live via /doomvolume. */
     public float doomSfxVolume = 1f;
     public float doomMusicVolume = 1f;
-    /** DOOM skill, 1 to 5. The menu's New Game choice is persisted here and applies to every
-     * later boot, controlling per-skill monster spawns (P_LoadThings), damage scaling and
-     * monster respawning. */
+    /** DOOM skill 1-5 (ITYTD..NM). The menu's New Game choice persists here and governs
+     * every boot: monster spawns per-skill (P_LoadThings), damage scaling, respawn. */
     public int doomSkill = 3;
-    /** Whether right-clicking a block item against the drawn level places a real block. */
+    /** DOOM gamma correction 0 (off) to 4, id's own tables, for levels that read darker
+     * here than in the software renderer. */
+    public int gamma = 0;
+    /** Flat light raise, 0-4 notches of 16 — the options menu's Light Boost slider. */
+    public int lightBoost = 0;
+    /** Interface size: 0 = full status bar, 1 = simplified fullscreen numbers, 2 = none.
+     * The +/- keys step it in play, source-port style. */
+    public int hudSize = 0;
+    /** Crosshair, the Crispy Doom feature: 0 = off, 1 = cross, 2 = health-colored. */
+    public int crosshair = 0;
+    /** Kills/items/secrets and level time on screen, Crispy Doom's stats widget. */
+    public boolean levelStats = false;
+    /** Weapon bob amount, Crispy Doom's setting: 0 = full, 1 = 75%, 2 = off. */
+    public int bobScale = 0;
+    /** Free look: off locks the pitch level the way the original played. */
+    public boolean freelook = true;
+    /** BSP mesh: geometry from the map's own subsectors and segs, the software
+     * renderer's truth for trick maps. Experimental; takes effect at level load. */
+    public boolean bspMesh = false;
+    /** B2: right-clicking a block item against the drawn level places real MC blocks. */
     public boolean placeBlocks = true;
     /** DOOM hit points awarded per point of Minecraft attack damage on a melee swing.
      * The plain inverse of the health conversion would be 5.0; the default is higher so
@@ -46,8 +63,12 @@ public final class LatteDoomConfig {
      * software mixer), {@code classic}, {@code clip}, {@code audiolines}, or {@code none}.
      * They differ in how they reach the audio device and therefore in latency. */
     public String soundDriver = "super";
-    /** Extra WADs merged on top of the IWAD, in load order (SIGIL, custom maps...). */
+    /** Extra WADs merged on top of the IWAD, in load order (SIGIL, custom maps…). */
     public final List<Path> pwads = new ArrayList<>();
+    /** Standalone DEHACKED/BEX patch files applied after the WAD set, in order. Only ever
+     * filled explicitly (a /load of a .deh, or auto-pairing with a WAD of the same name);
+     * never scanned from the folder. */
+    public final List<Path> dehs = new ArrayList<>();
 
     private LatteDoomConfig(Path dataDir) {
         this.dataDir = dataDir;
@@ -72,9 +93,8 @@ public final class LatteDoomConfig {
         if (!iwad.isEmpty()) {
             final Path p = Path.of(iwad);
             cfg.iwadPath = p.isAbsolute() ? p : cfg.dataDir.resolve(p);
-            // A configured base-WAD path that is in fact a PWAD is rejected and the folder
-            // scan takes over: loading a PWAD as the base WAD fails later, in texture
-            // lookups, with a far less obvious error.
+            // SELF-HEAL: a configured "iwad" that is really a PWAD (no PLAYPAL — the
+            // SIGIL-as-iwad crash) is rejected and the folder scan takes over
             if (!Files.exists(cfg.iwadPath) || !isIwadFile(cfg.iwadPath)) {
                 cfg.iwadPath = null;
             }
@@ -101,14 +121,47 @@ public final class LatteDoomConfig {
         } catch (NumberFormatException e) {
             cfg.doomSkill = 3;
         }
+        try {
+            cfg.gamma = Math.max(0, Math.min(4,
+                Integer.parseInt(props.getProperty("gamma", "0").trim())));
+        } catch (NumberFormatException e) {
+            cfg.gamma = 0;
+        }
+        try {
+            cfg.lightBoost = Math.max(0, Math.min(4,
+                Integer.parseInt(props.getProperty("light-boost", "0").trim())));
+        } catch (NumberFormatException e) {
+            cfg.lightBoost = 0;
+        }
+        try {
+            cfg.hudSize = Math.max(0, Math.min(2,
+                Integer.parseInt(props.getProperty("hud-size", "0").trim())));
+        } catch (NumberFormatException e) {
+            cfg.hudSize = 0;
+        }
+        try {
+            cfg.crosshair = Math.max(0, Math.min(2,
+                Integer.parseInt(props.getProperty("crosshair", "0").trim())));
+        } catch (NumberFormatException e) {
+            cfg.crosshair = 0;
+        }
+        cfg.levelStats = Boolean.parseBoolean(props.getProperty("level-stats", "false"));
+        cfg.freelook = Boolean.parseBoolean(props.getProperty("freelook", "true"));
+        cfg.bspMesh = Boolean.parseBoolean(props.getProperty("bsp-mesh", "false"));
+        try {
+            cfg.bobScale = Math.max(0, Math.min(2,
+                Integer.parseInt(props.getProperty("weapon-bob", "0").trim())));
+        } catch (NumberFormatException e) {
+            cfg.bobScale = 0;
+        }
 
-        // Extra WADs, in explicit order from the "pwads" property: comma-separated names,
-        // either absolute or relative to the pwads folder. Without that property every WAD
-        // in pwads/ is loaded alphabetically. These are the user's own files, layered on
-        // top of the user's own IWAD at runtime.
+        // Extra WADs, explicit order via the "pwads" property (comma-separated names,
+        // relative to the pwads/ folder or absolute). These are the user's own files —
+        // merged, not shipped, and layered on top of their own IWAD.
         cfg.loadPwads(props.getProperty("pwads", "").trim());
+        cfg.loadDehs(props.getProperty("dehs", "").trim());
 
-        // Write the file back so that every setting is discoverable in it.
+        // Write the file back so users can discover the knobs.
         props.setProperty("iwad", cfg.iwadPath != null ? cfg.iwadPath.toString() : "");
         props.setProperty("novert", Boolean.toString(cfg.novert));
         props.setProperty("pause-minecraft", Boolean.toString(cfg.pauseMinecraft));
@@ -118,11 +171,19 @@ public final class LatteDoomConfig {
         props.setProperty("doom-sfx-volume", Float.toString(cfg.doomSfxVolume));
         props.setProperty("doom-music-volume", Float.toString(cfg.doomMusicVolume));
         props.setProperty("doom-skill", Integer.toString(cfg.doomSkill));
+        props.setProperty("gamma", Integer.toString(cfg.gamma));
+        props.setProperty("light-boost", Integer.toString(cfg.lightBoost));
+        props.setProperty("hud-size", Integer.toString(cfg.hudSize));
+        props.setProperty("crosshair", Integer.toString(cfg.crosshair));
+        props.setProperty("level-stats", Boolean.toString(cfg.levelStats));
+        props.setProperty("weapon-bob", Integer.toString(cfg.bobScale));
+        props.setProperty("freelook", Boolean.toString(cfg.freelook));
+        props.setProperty("bsp-mesh", Boolean.toString(cfg.bspMesh));
         if (props.getProperty("pwads") == null) {
             props.setProperty("pwads", "");
         }
         try (OutputStream out = Files.newOutputStream(file)) {
-            props.store(out, "Latte Doom: iwad: path to DOOM.WAD (or drop it in this folder); "
+            props.store(out, "Latte Doom — iwad: path to DOOM.WAD (or drop it in this folder); "
                 + "novert: mouse never moves you forward; pause-minecraft: freeze MC while playing; "
                 + "doom-sfx-volume / doom-music-volume: 0.0-1.0, DOOM's own audio levels");
         } catch (IOException e) {
@@ -140,10 +201,9 @@ public final class LatteDoomConfig {
     }
 
     /**
-     * Persists the settings that change at runtime, preserving every other key already in
-     * the file. Without this, volume changes made in game would be lost on restart, since
-     * {@link #load} is the only other writer. Synchronised, because volume can be changed
-     * from more than one thread.
+     * Persist the mutable runtime knobs (the volume sliders) to disk, preserving every other
+     * key already in the file. load() is the only OTHER writer, so live slider changes would
+     * be lost on restart without this. Synchronized: /doomvolume can fire from any thread.
      */
     public synchronized void save() {
         final Path file = dataDir.resolve("latte-doom.properties");
@@ -163,8 +223,16 @@ public final class LatteDoomConfig {
         props.setProperty("doom-sfx-volume", Float.toString(doomSfxVolume));
         props.setProperty("doom-music-volume", Float.toString(doomMusicVolume));
         props.setProperty("doom-skill", Integer.toString(doomSkill));
-        // The pwad command edits the load order at runtime: absolute paths, comma-joined,
-        // in the same format load() parses. Relative names still resolve against pwads/.
+        props.setProperty("gamma", Integer.toString(gamma));
+        props.setProperty("light-boost", Integer.toString(lightBoost));
+        props.setProperty("hud-size", Integer.toString(hudSize));
+        props.setProperty("crosshair", Integer.toString(crosshair));
+        props.setProperty("level-stats", Boolean.toString(levelStats));
+        props.setProperty("weapon-bob", Integer.toString(bobScale));
+        props.setProperty("freelook", Boolean.toString(freelook));
+        props.setProperty("bsp-mesh", Boolean.toString(bspMesh));
+        // /pwad edits the load order at runtime — absolute paths, comma-joined,
+        // same format load() parses (relative names still resolve against pwads/)
         final StringBuilder pw = new StringBuilder();
         for (Path p : pwads) {
             if (pw.length() > 0) {
@@ -172,8 +240,15 @@ public final class LatteDoomConfig {
             }
             pw.append(p.toAbsolutePath());
         }
-        // "none" means explicitly cleared; an empty value would restart the folder scan.
         props.setProperty("pwads", pw.length() == 0 ? "none" : pw.toString());
+        final StringBuilder dh = new StringBuilder();
+        for (Path p : dehs) {
+            if (dh.length() > 0) {
+                dh.append(',');
+            }
+            dh.append(p.toAbsolutePath());
+        }
+        props.setProperty("dehs", dh.length() == 0 ? "none" : dh.toString());
         try (OutputStream out = Files.newOutputStream(file)) {
             props.store(out, "Latte Doom config");
         } catch (IOException e) {
@@ -181,13 +256,10 @@ public final class LatteDoomConfig {
         }
     }
 
-    /** A base WAD identifies itself in its header magic, {@code IWAD} rather than
-     * {@code PWAD}, and carries the {@code PLAYPAL} palette. Both tests are required: the
-     * palette test alone is not sufficient, because large total-conversion
-     * PWADs ship their own PLAYPAL and would pass it, yet fail to boot as a base WAD.
-     * At least one map lump is required as well, so that resource WADs are not accepted.
-     * Only the header and directory are read, which is cheap enough for validating
-     * command input. */
+    /** A real IWAD says so in its header magic ("IWAD" vs "PWAD") AND carries the PLAYPAL
+     * palette. The palette test alone let Eviternity through — big total-conversion PWADs
+     * ship their own PLAYPAL, and booting one standalone just bounces (three /warp
+     * attempts on tape). Reads only the header + directory — cheap for command validation. */
     public static boolean isIwadFile(Path p) {
         try (java.io.RandomAccessFile f = new java.io.RandomAccessFile(p.toFile(), "r")) {
             final byte[] head = new byte[12];
@@ -344,34 +416,121 @@ public final class LatteDoomConfig {
         } catch (IOException ignored) {
         }
         if (list.equalsIgnoreCase("none")) {
-            return; // explicitly cleared (/doomwad pwad none): the folder is not scanned
+            return; // explicit empty (/doomwad pwad none) — do NOT auto-scan the folder
         }
-        if (!list.isEmpty()) {
-            for (String name : list.split(",")) {
-                final String trimmed = name.trim();
-                if (trimmed.isEmpty()) {
-                    continue;
-                }
-                final Path p = Path.of(trimmed);
-                final Path resolved = p.isAbsolute() ? p : pwadDir.resolve(p);
-                if (Files.exists(resolved) && !isIwad(resolved)) {
-                    pwads.add(resolved);
-                }
+        // Only an explicit list loads. The old fallback merged every .wad dropped in
+        // pwads/ alphabetically, which meant files stacked onto games they were never
+        // meant for, silently — the load report is the only place a merge should come from.
+        for (String name : list.split(",")) {
+            final String trimmed = name.trim();
+            if (trimmed.isEmpty()) {
+                continue;
             }
+            final Path p = Path.of(trimmed);
+            final Path resolved = p.isAbsolute() ? p : pwadDir.resolve(p);
+            if (Files.exists(resolved) && !isIwad(resolved)) {
+                pwads.add(resolved);
+            }
+        }
+    }
+
+    private void loadDehs(String list) {
+        if (list.isEmpty() || list.equalsIgnoreCase("none")) {
             return;
         }
-        // No explicit order configured: load every WAD in pwads/ alphabetically.
-        try (Stream<Path> s = Files.list(pwadDir)) {
-            s.filter(p -> p.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".wad"))
-                .filter(p -> !isIwad(p))
-                .sorted()
-                .forEach(pwads::add);
-        } catch (IOException ignored) {
+        final Path pwadDir = dataDir.resolve("pwads");
+        for (String name : list.split(",")) {
+            final String trimmed = name.trim();
+            if (trimmed.isEmpty()) {
+                continue;
+            }
+            final Path p = Path.of(trimmed);
+            final Path resolved = p.isAbsolute() ? p : pwadDir.resolve(p);
+            if (Files.exists(resolved)) {
+                dehs.add(resolved);
+            }
         }
     }
 
     /** Don't let the IWAD double-load as a PWAD if a user drops a copy in pwads/. */
     private boolean isIwad(Path p) {
         return iwadPath != null && p.toAbsolutePath().equals(iwadPath.toAbsolutePath());
+    }
+
+    /** The WAD's directory entries' names, or an empty list when unreadable. */
+    private static List<String> lumpNames(Path p) {
+        final List<String> names = new ArrayList<>();
+        try (java.io.RandomAccessFile f = new java.io.RandomAccessFile(p.toFile(), "r")) {
+            final byte[] head = new byte[12];
+            f.readFully(head);
+            final java.nio.ByteBuffer hb = java.nio.ByteBuffer.wrap(head)
+                .order(java.nio.ByteOrder.LITTLE_ENDIAN);
+            hb.position(4);
+            final int num = hb.getInt();
+            final int dirOfs = hb.getInt();
+            if (num <= 0 || num > 65536 || dirOfs <= 0 || dirOfs >= f.length()) {
+                return names;
+            }
+            f.seek(dirOfs);
+            final byte[] dir = new byte[Math.min(num * 16, (int) (f.length() - dirOfs))];
+            f.readFully(dir);
+            for (int i = 0; i + 16 <= dir.length; i += 16) {
+                int end = 8;
+                while (end < 16 && dir[i + end] != 0) {
+                    end++;
+                }
+                names.add(new String(dir, i + 8, end - 8,
+                    java.nio.charset.StandardCharsets.US_ASCII));
+            }
+        } catch (Exception ignored) {
+        }
+        return names;
+    }
+
+    /**
+     * Which game family this WAD's maps belong to, read from its own directory:
+     * 'E' = ExMy (DOOM), 'M' = MAPxx (DOOM II), 'B' = both, 'A' = no maps at all
+     * (a resource or addon WAD, usable over any base).
+     */
+    public static char mapScheme(Path p) {
+        boolean e = false, m = false;
+        for (String n : lumpNames(p)) {
+            if (n.length() == 4 && n.charAt(0) == 'E' && n.charAt(2) == 'M'
+                && n.charAt(1) >= '1' && n.charAt(1) <= '9'
+                && n.charAt(3) >= '1' && n.charAt(3) <= '9') {
+                e = true;
+            } else if (n.length() == 5 && n.startsWith("MAP")
+                && n.charAt(3) >= '0' && n.charAt(3) <= '9'
+                && n.charAt(4) >= '0' && n.charAt(4) <= '9') {
+                m = true;
+            }
+            if (e && m) {
+                return 'B';
+            }
+        }
+        return e ? 'E' : m ? 'M' : 'A';
+    }
+
+    /** How many map markers the WAD carries. */
+    public static int mapCount(Path p) {
+        int count = 0;
+        for (String n : lumpNames(p)) {
+            final byte[] b = java.util.Arrays.copyOf(
+                n.getBytes(java.nio.charset.StandardCharsets.US_ASCII), 8);
+            if (n.length() >= 4 && isMapMarker(b, 0)) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /** Whether the WAD embeds its own DEHACKED lump (then a loose .deh is not paired). */
+    public static boolean hasDehackedLump(Path p) {
+        for (String n : lumpNames(p)) {
+            if ("DEHACKED".equalsIgnoreCase(n)) {
+                return true;
+            }
+        }
+        return false;
     }
 }

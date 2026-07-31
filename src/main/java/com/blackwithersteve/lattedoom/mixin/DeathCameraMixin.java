@@ -10,14 +10,10 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * Camera behaviour inside a DOOM level: the engine's view bob while alive, and the
- * engine's death view while dying.
- *
- * <p>A dying transformed player gets DOOM's death camera rather than Minecraft's: no
- * sideways roll, the eye sinking straight down to 6 map units above the feet, matching
- * {@code P_DeathThink}, which drops the view height from 41 to 6. The red fade over it is
- * drawn by {@code DoomDeathScreen}. Untransformed players keep Minecraft's death
- * animation.
+ * A dying MARINE's view falls the DOOM way, not Minecraft's: no sideways death roll —
+ * the camera sinks STRAIGHT DOWN to 6 map units above the feet (P_DeathThink drops
+ * viewheight 41 -> 6), red death fade over it (DoomDeathScreen). Vanilla deaths (not
+ * transformed) keep Minecraft's keel-over untouched.
  */
 @Mixin(Camera.class)
 public abstract class DeathCameraMixin {
@@ -29,11 +25,12 @@ public abstract class DeathCameraMixin {
             return;
         }
         if (!mc.player.isDeadOrDying()) {
-            // Alive, first person, inside a level: apply DOOM's view bob for every player
-            // at Minecraft's eye height. A transformed player's amplitude comes from the
-            // movement integrator's momentum, an untransformed player's from actual
-            // velocity, so the bob can never outpace the movement it belongs to.
-            // Minecraft's own head bob is cancelled in GameRendererBobMixin.
+            // LIVING, first person, inside the level: DOOM's view bob for EVERYONE at
+            // Minecraft's eye height (the 41-unit doom eye was tried and reverted —
+            // monsters read proper-sized from the MC eye). Marine amplitude from the
+            // integrator's momenta, plain Steve's from his real velocity; MC's own
+            // head-bob sits out via GameRendererBobMixin — its cadence read "way too
+            // fast" in levels regardless of the walk counters.
             if (mc.options.getCameraType().isFirstPerson()
                 && LatteWorld.insideLevel(mc.player.getX(), mc.player.getY(), mc.player.getZ())) {
                 final double bob = LatteWorld.marineForm()
@@ -48,15 +45,14 @@ public abstract class DeathCameraMixin {
             return;
         }
         if (!LatteWorld.marineForm()) {
-            return; // an untransformed player dies the vanilla way
+            return; // plain Steve's death stays fully vanilla
         }
-        // Suppress Minecraft's death roll; the downstream renderer derives the tilt from
-        // these two fields.
+        // kill the MC death roll (the downstream renderer reads these for the tilt)
         if (state.entityRenderState != null) {
             state.entityRenderState.deathTime = 0;
             state.entityRenderState.isDeadOrDying = false;
         }
-        // Sink the eye to 6/32 of a block above the feet over the death ticks.
+        // DOOM's sink: lerp the eye to 6/32 blocks above the feet across the death ticks
         final double t = Math.min(1.0, (mc.player.deathTime + partial) / 20.0);
         final double targetY = mc.player.getY() + 6.0 / 32.0;
         final double y = state.pos.y + (targetY - state.pos.y) * t;

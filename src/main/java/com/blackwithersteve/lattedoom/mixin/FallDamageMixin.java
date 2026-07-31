@@ -9,10 +9,9 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
- * DOOM has no fall damage, so a transformed player takes none either. The client resets
- * its own fall distance, but the server tracks falls independently from movement packets,
- * so the cancel has to happen here as well; it is keyed on the synchronised marine roster
- * and therefore applies on both sides.
+ * DOOM has no fall damage, so neither does a marine. The client already resets its fall
+ * distance, but the SERVER tracks falls on its own from movement packets — this is the
+ * server-side (and client-instance) cancel, keyed on the synced marine roster.
  */
 @Mixin(Player.class)
 public abstract class FallDamageMixin {

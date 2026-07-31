@@ -10,25 +10,22 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * Draws the view weapon, its muzzle flash and the status bar as a HUD overlay. The engine's
- * own weapon-sprite state machine decides which sprite and frame are shown and where they
- * sit; this class draws that exact lump on Minecraft's screen.
- *
- * <p>Weapon sprites live in the engine's 320x200 canvas, where the left edge is
- * {@code sx - leftOffset} and the top is {@code sy - topOffset}, per {@code R_DrawPSprite}.
- * That canvas is mapped to the screen at 4:3, centred horizontally and anchored to the
- * bottom edge.
+ * The marine's view weapon (and muzzle flash) as a HUD overlay — the ENGINE's own psprite
+ * state machine decides which sprite/frame shows and where it bobs; we draw the exact
+ * lump on Minecraft's screen. Coordinates: DOOM psprites live in a 320x200 canvas
+ * (R_DrawPSprite: left edge = sx - leftoffset, top = sy - topoffset); we map that canvas
+ * to the screen at 4:3 (x-scale = height×4/3÷320) hugging the bottom, centered.
  */
 public final class LatteHud {
 
     private static final Map<String, Identifier> IDS = new HashMap<>();
 
     /**
-     * Whether the DOOM interface can be drawn. Transforming is instant but the engine boots
-     * on its own thread, and its first snapshot can be seconds away, so this stays false for
-     * a while after the player transforms. Anything that hides Minecraft's own interface has
-     * to consult this rather than the form alone, or the player is left with neither
-     * interface for as long as the boot takes.
+     * Whether the DOOM interface can actually be drawn. Transforming is instant but the
+     * engine boots on its own thread, and its first snapshot can be seconds away, so this is
+     * false for a while after the player transforms. Anything that hides Minecraft's own
+     * interface has to consult this rather than the form alone, or the player is left with
+     * neither interface for as long as the boot takes.
      */
     public static boolean ready() {
         return LatteWorld.marineForm()
@@ -40,10 +37,10 @@ public final class LatteHud {
         if (!LatteWorld.marineForm()) {
             return; // the view weapon belongs to a transformed player only
         }
-        // Deliberately not restricted to being inside a level: a transformed player keeps
-        // the weapon and status bar anywhere, since the engine's stats exist for as long as
-        // it has a level loaded. These stats always come from this client's own engine,
-        // even when the world geometry is being fed by another player's engine.
+        // NOT gated on being inside the level: the marine keeps his suit (gun + STBAR)
+        // in the overworld too — the engine's stats exist as long as it runs a level.
+        // The SUIT snapshot is always OUR OWN engine — on a shared level the world may
+        // be someone else's feed, but the ammo counter never is.
         final WorldSnapshot snap = LatteWorld.suitSnap();
         final SpriteSet sprites = LatteWorld.sprites();
         if (snap == null || sprites == null) {
@@ -53,22 +50,48 @@ public final class LatteHud {
         final int guiW = mc.getWindow().getGuiScaledWidth();
         final int guiH = mc.getWindow().getGuiScaledHeight();
 
-        // The weapon bob is computed here rather than by the engine, because mirroring the
-        // player's position zeroes the engine-side momentum the bob would be derived from.
-        // The engine's own formula is used, min(16, v squared / 4), driven by its clock.
+        // DOOM's weapon bob, synthesized: the engine can't bob (the mirror zeroes the
+        // marine's momentum), so feed its OWN formula with the MC player's speed —
+        // bob = min(MAXBOB 16, v²/4), swaying on the engine's leveltime clock.
         double bobX = 0, bobY = 0;
         if (mc.player != null) {
             final double v = mc.player.getDeltaMovement().horizontalDistance()
                 * LatteWorld.UNITS / 1.75; // blocks/tick -> u/tic
-            final double bob = Math.min(16.0, v * v / 4.0);
-            // A continuous tic clock rather than the integer tic: quantising the sway to
-            // 35 Hz makes the bob visibly step on a high-refresh display.
+            // Crispy Doom's bob setting: full, three quarters, or none
+            final double bobAmount = switch (com.blackwithersteve.lattedoom
+                .LatteDoomClient.bobScale()) {
+                case 1 -> 0.75;
+                case 2 -> 0.0;
+                default -> 1.0;
+            };
+            // The phase clock is continuous, but the AMPLITUDE comes from the player's
+            // velocity, which only changes at 20Hz tick boundaries — so starting and
+            // stopping staircased for a few frames while steady motion was smooth.
+            // Ease the amplitude toward its target on frame time instead.
+            final double target = Math.min(16.0, v * v / 4.0) * bobAmount;
+            final long now = System.nanoTime();
+            final double dt = lastBobNanos == 0 ? 0.05
+                : Math.min(0.1, (now - lastBobNanos) / 1.0e9);
+            lastBobNanos = now;
+            smoothBobAmp += (target - smoothBobAmp) * Math.min(1.0, dt * 14.0);
+            final double bob = smoothBobAmp;
+            // CONTINUOUS tic clock, not the integer tic: quantizing the sway phase to
+            // 35Hz made the bob step like a low-refresh screen on any fast monitor
             final double a = (LatteWorld.ticTime() * 128.0 % 8192.0) / 8192.0 * 2.0 * Math.PI;
             bobX = bob * Math.cos(a);
             bobY = bob * Math.abs(Math.sin(a));
         }
-        // The weapon is lit by the sector the player stands in. Full-bright frames, such
-        // as the muzzle flash, override this, as they do in R_DrawPSprite.
+        // only the ready state bobs — A_WeaponReady is the one mover of the psprite in
+        // the original, so firing freezes the sway wherever it was
+        if (snap.weaponReady) {
+            frozenBobX = bobX;
+            frozenBobY = bobY;
+        } else {
+            bobX = frozenBobX;
+            bobY = frozenBobY;
+        }
+        // the gun in your hands is lit by the room you stand in (fullbright frames — the
+        // muzzle flash — override, exactly like R_DrawPSprite's colormap pick)
         int gunShade = 255;
         if (mc.player != null) {
             final int lc = LatteWorld.levelLightCoords(
@@ -77,12 +100,11 @@ public final class LatteHud {
                 gunShade = LatteMesh.shadeByte((lc >> 4) * 255 / 15);
             }
         }
-        // The view weapon is hidden while the player is dead, as the engine lowers it out
-        // of view on death; the status bar remains. The engine cannot drive this itself,
-        // because the mirrored player object never dies.
+        // dead marines hold no gun: DOOM drops the view weapon away on death — while the
+        // MC player is dead (DoomDeathScreen up) the psprites vanish; the STBAR stays,
+        // exactly like 1993 (the engine's immortal mirror can't do this for us).
         final boolean dead = mc.player != null && mc.player.isDeadOrDying();
-        // The automap replaces the view, including the weapon, with the status bar drawn
-        // on top; this is the original's layering.
+        // the automap replaces the view (gun included), STBAR stays on top — vanilla layering
         final DoomMap amMap = LatteWorld.map();
         final boolean automap = DoomAutomap.active() && amMap != null && mc.player != null;
         if (automap) {
@@ -91,16 +113,151 @@ public final class LatteHud {
                 LatteWorld.worldToDoomY(mc.player.getZ()),
                 -mc.player.getYRot() - 90.0, guiW, guiH);
         } else if (!dead) {
-            draw(g, sprites, snap.wSprite, snap.wFrame, snap.wX + bobX, snap.wY + bobY,
-                guiW, guiH, gunShade);
-            draw(g, sprites, snap.fSprite, snap.fFrame, snap.fX + bobX, snap.fY + bobY,
-                guiW, guiH, gunShade);
+            draw(g, sprites, snap.wSprite, snap.wFrame, snap.wX + bobX,
+                snap.wY + bobY, guiW, guiH, gunShade);
+            draw(g, sprites, snap.fSprite, snap.fFrame, snap.fX + bobX,
+                snap.fY + bobY, guiW, guiH, gunShade);
         }
-        statusBar(g, snap, mc, guiW, guiH);
+        switch (com.blackwithersteve.lattedoom.LatteDoomClient.hudSize()) {
+            case 0 -> statusBar(g, snap, mc, guiW, guiH);
+            case 1 -> minimalHud(g, snap, sprites, mc, guiW, guiH);
+            default -> { } // size 2: nothing but the world
+        }
+        // the engine's heads-up line, top left in the small font, ~4 seconds like HU
+        if (snap.message != null && !snap.message.equals(lastMessage)) {
+            lastMessage = snap.message;
+            messageUntil = System.currentTimeMillis() + 4000;
+        }
+        if (lastMessage != null && System.currentTimeMillis() < messageUntil && !automap) {
+            drawHudText(g, lastMessage.toUpperCase(java.util.Locale.ROOT),
+                edgeLeft(guiW, guiH) + 2, 2, guiW, guiH);
+        }
+        if (!automap && !dead) {
+            crosshair(g, mc, guiW, guiH);
+        }
+        if (com.blackwithersteve.lattedoom.LatteDoomClient.levelStats()
+            && LatteWorld.map() != null) {
+            statsWidget(g, snap, guiW, guiH);
+        }
         flashes(g, snap, guiW, guiH);
     }
 
-    // ------------------------------------------------------------------ status bar
+    /** Crispy Doom's crosshair: a small cross at the view center, optionally colored by
+     * health the way Crispy colors it (green, then yellow under 2/3, red under 1/3). */
+    private static void crosshair(GuiGraphicsExtractor g, Minecraft mc, int guiW, int guiH) {
+        final int mode = com.blackwithersteve.lattedoom.LatteDoomClient.crosshair();
+        if (mode == 0 || mc.player == null) {
+            return;
+        }
+        int color = 0xFFDADADA;
+        if (mode == 2) {
+            final int health = (int) Math.ceil(mc.player.getHealth() * 5.0f);
+            color = health > 66 ? 0xFF40C040 : health > 33 ? 0xFFD0C020 : 0xFFD03030;
+        }
+        final int cx = guiW / 2, cy = guiH / 2;
+        g.fill(cx - 3, cy, cx + 4, cy + 1, color);
+        g.fill(cx, cy - 3, cx + 1, cy + 4, color);
+    }
+
+    /** Crispy Doom's level stats: kills, items, secrets and the level time, top left,
+     * in the WAD's small font. */
+    private static void statsWidget(GuiGraphicsExtractor g, WorldSnapshot snap,
+                                    int guiW, int guiH) {
+        final double left = edgeLeft(guiW, guiH);
+        drawHudText(g, String.format("K %d/%d  I %d/%d  S %d/%d",
+            snap.killCount, snap.totalKills, snap.itemCount, snap.totalItems,
+            snap.secretCount, snap.totalSecrets), left + 2, 12, guiW, guiH);
+        final int seconds = snap.levelTime / 35;
+        drawHudText(g, String.format("TIME %d:%02d", seconds / 60, seconds % 60),
+            left + 2, 22, guiW, guiH);
+    }
+
+    /**
+     * The simplified fullscreen interface source ports show at larger screen sizes:
+     * health at the left edge, the ready weapon's ammo at the right, owned keys stacked
+     * above it — all from the status bar's own art, nothing modern.
+     */
+    private static void minimalHud(GuiGraphicsExtractor g, WorldSnapshot snap,
+                                   SpriteSet sprites, Minecraft mc, int guiW, int guiH) {
+        // widescreen: the readouts hug the TRUE screen edges, the way widescreen source
+        // ports place their fullscreen huds; on a 4:3 window the edges are 0 and 320 and
+        // nothing changes. Room for three digits everywhere, so 200% cannot reach an icon.
+        final double left = edgeLeft(guiW, guiH);
+        final double right = edgeRight(guiW, guiH);
+        final int health = Math.min(200, (int) Math.ceil(mc.player.getHealth() * 5.0f));
+        // the medikit in front of health and the armor in front of armor, so the two
+        // numbers read at a glance — the WAD's own pickup sprites, scaled to the digits
+        icon(g, sprites, "MEDI", left + 2, 196, 13, guiW, guiH);
+        numRight(g, "sttnum", health, left + 74, 184, guiW, guiH);
+        patch(g, "sttprcnt", left + 74, 184, guiW, guiH);
+        icon(g, sprites, snap.armorType == 2 ? "ARM2" : "ARM1", left + 90, 196, 13,
+            guiW, guiH);
+        numRight(g, "sttnum", snap.armor, left + 162, 184, guiW, guiH);
+        patch(g, "sttprcnt", left + 162, 184, guiW, guiH);
+        if (snap.readyAmmoType >= 0 && snap.readyAmmoType < 4 && snap.ammo != null) {
+            numRight(g, "sttnum", snap.ammo[snap.readyAmmoType], right - 4, 184,
+                guiW, guiH);
+        }
+        // keys in fixed slots above the ammo, blue/yellow/red top to bottom; a skull
+        // draws over its card the way the status bar's slots resolve them
+        if (snap.cards != null) {
+            for (int k = 0; k < 3; k++) {
+                final int y = 150 + k * 10;
+                if (snap.cards[k]) {
+                    patch(g, "stkeys" + k, right - 12, y, guiW, guiH);
+                }
+                if (snap.cards[k + 3]) {
+                    patch(g, "stkeys" + (k + 3), right - 12, y, guiW, guiH);
+                }
+            }
+        }
+    }
+
+    /** The true left screen edge in canvas units (0 on a 4:3 window, negative on wider). */
+    private static double edgeLeft(int guiW, int guiH) {
+        final double xs = guiH * (4.0 / 3.0) / 320.0;
+        return 160.0 - guiW / (2.0 * xs);
+    }
+
+    private static double edgeRight(int guiW, int guiH) {
+        final double xs = guiH * (4.0 / 3.0) / 320.0;
+        return 160.0 + guiW / (2.0 * xs);
+    }
+
+    private static double frozenBobX, frozenBobY;
+    private static double smoothBobAmp;
+    private static long lastBobNanos;
+    private static String lastMessage;
+    private static long messageUntil;
+
+    /** A world sprite as a small HUD icon: bottom-left anchored at canvas coords,
+     * scaled to the given height. */
+    private static void icon(GuiGraphicsExtractor g, SpriteSet sprites, String sprName,
+                             double canvasX, double canvasBottomY, double targetH,
+                             int guiW, int guiH) {
+        if (sprites == null) {
+            return;
+        }
+        final SpriteSet.View view = sprites.view(sprName, 0, 0);
+        if (view == null) {
+            return;
+        }
+        final String key = "sprites/" + view.lump();
+        final int[] size = DoomRuntimeTextures.textureSize(key);
+        if (size == null || size[1] <= 0) {
+            return;
+        }
+        final double f = targetH / size[1];
+        final double xs = guiH * (4.0 / 3.0) / 320.0;
+        final double ys = guiH / 200.0;
+        final int x = (int) Math.round(guiW / 2.0 + (canvasX - 160.0) * xs);
+        final int y = (int) Math.round((canvasBottomY - targetH) * ys);
+        g.blit(RenderPipelines.GUI_TEXTURED, idOf(key), x, y, 0.0f, 0.0f,
+            (int) Math.round(size[0] * f * xs), (int) Math.round(targetH * ys),
+            size[0], size[1], size[0], size[1]);
+    }
+
+    // ------------------------------------------------------------------ the 1:1 STBAR
 
     private static int lastWeaponMask = -1;
     private static int evilUntilTic;
@@ -111,7 +268,7 @@ public final class LatteHud {
         patch(g, "stbar", 0, 168, guiW, guiH);
         patch(g, "starms", 104, 168, guiW, guiH);
 
-        // Ammunition for the ready weapon, blank for the fist and chainsaw as in the original.
+        // ready-weapon ammo (blank for fist/chainsaw, exactly like vanilla)
         if (snap.readyAmmoType >= 0 && snap.readyAmmoType < 4 && snap.ammo != null) {
             numRight(g, "sttnum", snap.ammo[snap.readyAmmoType], 44, 171, guiW, guiH);
         }
@@ -121,7 +278,7 @@ public final class LatteHud {
         numRight(g, "sttnum", snap.armor, 221, 171, guiW, guiH);
         patch(g, "sttprcnt", 221, 171, guiW, guiH);
 
-        // The arms panel: digits 2 to 7 light up for owned weapons, pistol through BFG.
+        // ARMS: digits 2-7 light up with owned weapons (pistol..bfg = weaponOwned[1..6])
         if (snap.weaponOwned != null) {
             for (int i = 0; i < 6; i++) {
                 final boolean owned = i + 1 < snap.weaponOwned.length && snap.weaponOwned[i + 1];
@@ -130,7 +287,7 @@ public final class LatteHud {
             }
         }
 
-        // Keys: key cards 0 to 2 and skull keys 3 to 5 share the three rows.
+        // keys: cards 0-2, skulls 3-5 share the three rows
         if (snap.cards != null && snap.cards.length >= 6) {
             for (int row = 0; row < 3; row++) {
                 if (snap.cards[row + 3]) {
@@ -141,8 +298,7 @@ public final class LatteHud {
             }
         }
 
-        // Ammunition table, current over maximum: the bullet, shell, rocket and cell rows
-        // correspond to pools 0, 1, 3 and 2.
+        // ammo table (cur/max): rows BULL, SHEL, RCKT, CELL = pools 0, 1, 3, 2
         if (snap.ammo != null && snap.maxAmmo != null) {
             final int[] rows = {0, 1, 3, 2};
             for (int r = 0; r < 4; r++) {
@@ -151,9 +307,8 @@ public final class LatteHud {
             }
         }
 
-        // The face, following a simplified st_stuff: pain level by health, a grimace while
-        // the damage counter runs, a grin for about two seconds after picking up a new
-        // weapon, and the dead face at zero health.
+        // the face (simplified st_stuff): pain level by health, hurt grimace while the
+        // damage counter runs, evil grin ~2s on a new weapon, dead at zero
         if (snap.weaponOwned != null) {
             int mask = 0;
             for (int i = 0; i < snap.weaponOwned.length; i++) {
@@ -180,7 +335,7 @@ public final class LatteHud {
         patch(g, face, 143, 168, guiW, guiH);
     }
 
-    /** Vanilla's palette shifts, as overlays: damage reds, pickup golds, over everything. */
+    /** Vanilla's palette shifts, as overlays: damage reds, pickup golds — over EVERYTHING. */
     private static void flashes(GuiGraphicsExtractor g, WorldSnapshot snap, int guiW, int guiH) {
         if (snap.damageCount > 0) {
             final int a = (int) (Math.min(1.0, snap.damageCount / 32.0) * 0.55 * 255);
@@ -192,21 +347,45 @@ public final class LatteHud {
     }
 
     /** Public draw of a registered DOOM menu/status patch ("gfx/&lt;lump&gt;") at 320x200 canvas
-     * coordinates with V_DrawPatch semantics, centred at 4:3, for overlays drawn in the
-     * engine's own style. Does nothing if the WAD does not provide the lump. */
+     * coords, V_DrawPatch semantics, 4:3-centered — for DOOM-styled overlays like the volume
+     * menu. Silently no-ops if the lump wasn't in the WAD. */
     public static void drawGfx(GuiGraphicsExtractor g, String lump,
                                double canvasX, double canvasY, int guiW, int guiH) {
         patch(g, lump, canvasX, canvasY, guiW, guiH);
     }
 
-    /** Whether a menu or status patch is registered, that is present in the loaded WAD. */
+    /** Is a menu/status patch registered (present in the loaded WAD)? */
     public static boolean hasGfx(String lump) {
         return DoomRuntimeTextures.textureSize("gfx/" + lump) != null;
     }
 
-    /** Blit a status graphic at 320x200 canvas coordinates with V_DrawPatch semantics. The
-     * patch's own left and top offsets are subtracted, which matters for lumps such as the
-     * status-bar faces, whose offsets are large. */
+    /**
+     * A line of text in the WAD's own small font (the STCFN patches the heads-up messages
+     * use), for menu entries that have no ready-made graphic — the way source ports label
+     * options the original menu never had.
+     */
+    public static void drawHudText(GuiGraphicsExtractor g, String text,
+                                   double canvasX, double canvasY, int guiW, int guiH) {
+        double x = canvasX;
+        for (int i = 0; i < text.length(); i++) {
+            final char c = Character.toUpperCase(text.charAt(i));
+            if (c == ' ') {
+                x += 4;
+                continue;
+            }
+            final String lump = String.format("stcfn%03d", (int) c);
+            final int[] size = DoomRuntimeTextures.textureSize("gfx/" + lump);
+            if (size == null) {
+                x += 4;
+                continue;
+            }
+            patch(g, lump, x, canvasY, guiW, guiH);
+            x += size[0] + 1;
+        }
+    }
+
+    /** Blit a status graphic at classic 320x200 canvas coords, V_DrawPatch semantics
+     * (the patch's own left/top offsets are subtracted — the face lumps carry big ones). */
     private static void patch(GuiGraphicsExtractor g, String lump,
                               double canvasX, double canvasY, int guiW, int guiH) {
         final String key = "gfx/" + lump;
@@ -249,7 +428,7 @@ public final class LatteHud {
                              int ord, int frame, double sxPx, double syPx,
                              int guiW, int guiH, int shade) {
         if (ord <= 0) {
-            return; // -1 = none; 0 = SPR_TROO, the sprite slot S_NULL carries
+            return; // -1 = none; 0 = SPR_TROO, which S_NULL wears — the "floating imp"
         }
         final String name = LatteSprites.spriteName(ord);
         if (name == null) {
@@ -267,11 +446,14 @@ public final class LatteHud {
         }
         final int w = size[0], h = size[1];
         final double canvasX = sxPx - ofs[0];
-        // R_DrawPSprite with the status bar visible: the 3D view is 168 rows tall, so the
-        // weapon-sprite canvas centres on row 84 rather than 100, placing sprites 16.5
-        // pixels higher than a naive 200-row placement would, which would otherwise
-        // leave the weapon partly hidden behind the status bar.
-        final double canvasY = syPx - ofs[1] - 16.5;
+        // R_DrawPSprite's view-height math: with the status bar the 3D view is 168 tall
+        // and centers at 84, so psprites sit 16.5 rows above a naive 200-line placement;
+        // fullscreen the view is the whole 200 and the naive placement IS the right one.
+        // That 16.5 is exactly the vanilla difference between the two views — the gun
+        // shows more of itself at larger screen sizes and never moves anywhere else.
+        final double statusBarLift =
+            com.blackwithersteve.lattedoom.LatteDoomClient.hudSize() == 0 ? 16.5 : 0.0;
+        final double canvasY = syPx - ofs[1] - statusBarLift;
         final double xs = guiH * (4.0 / 3.0) / 320.0; // 4:3 pixel aspect (1:1.2 CRT pixels)
         final double ys = guiH / 200.0;
         final int x = (int) Math.round(guiW / 2.0 + (canvasX - 160.0) * xs);
@@ -284,7 +466,7 @@ public final class LatteHud {
     }
 
     private static Identifier idOf(String key) {
-        // Route through the sanitizer: bracket-rotation sprite lumps (BBRN[1) must map to
+        // route through the sanitizer: bracket-rotation sprite lumps (BBRN[1) must map to
         // the same safe name DoomRuntimeTextures registered
         return IDS.computeIfAbsent(DoomRuntimeTextures.safe(key),
             k -> Identifier.fromNamespaceAndPath("lattedoom", "textures/doom/" + k + ".png"));

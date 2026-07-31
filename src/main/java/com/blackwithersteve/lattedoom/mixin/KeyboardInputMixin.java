@@ -11,11 +11,10 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * A transformed player uses DOOM's key semantics: there is no crouch and no Minecraft
- * sprint, and Shift is the run key (Caps Lock toggles always-run; see
- * {@code LatteDoomClient}). Shift is captured for the movement integrator and then
- * stripped, together with sprint, from the input record, so vanilla never applies a
- * sneak pose or double-tap sprint to a transformed player.
+ * Marine form rewires the keyboard to 1993: there is no crouch and no Minecraft sprint —
+ * SHIFT is DOOM's run key (Caps Lock toggles always-run; see LatteDoomClient). Shift is
+ * captured for the physics, then shift+sprint are stripped from the input record so
+ * vanilla never sneak-poses or double-tap-sprints the transformed marine.
  */
 @Mixin(KeyboardInput.class)
 public abstract class KeyboardInputMixin {

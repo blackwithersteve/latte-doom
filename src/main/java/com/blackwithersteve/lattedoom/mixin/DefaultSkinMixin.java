@@ -11,11 +11,9 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import java.util.UUID;
 
 /**
- * Development convenience: offline usernames hash into one of nine default skins, which
- * makes screenshots and two-client tests inconsistent. With
- * {@code -Dlattedoom.steveskin=true} (set by the {@code client} and {@code client2} run
- * configurations) every default skin resolves to the classic one instead. The mixin is
- * inert without the flag, and skins fetched for online accounts are never affected.
+ * Dev-rig cosmetics: offline usernames hash into one of NINE default skins — with
+ * -Dlattedoom.steveskin=true (both play.bat instances) every default resolves to
+ * classic Steve. Inert without the flag; real (online) skins are untouched either way.
  */
 @Mixin(DefaultPlayerSkin.class)
 public abstract class DefaultSkinMixin {

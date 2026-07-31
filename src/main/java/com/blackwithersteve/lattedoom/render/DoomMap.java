@@ -10,11 +10,11 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * A level parsed from a WAD's raw map lumps: vertexes, linedefs resolved to coordinates
- * and front and back sectors, sectors with their heights, flats and light levels, and
- * things. It also answers the geometric query the rest of the mod needs, which sector
- * contains a given point: in the manner of {@code R_PointInSubsector}, from the nearest
- * linedef crossing in the +x direction and which side of it the point lies on.
+ * A DOOM level, parsed from the raw map lumps the extractor pulled out of the
+ * IWAD: vertexes, linedefs (resolved to coordinates and front/back sectors),
+ * sectors (heights, flats, light) and things. Plus the one geometric query the
+ * rasterizer needs: which sector contains a point — answered R_PointInSubsector
+ * style, by the nearest +x linedef crossing and which side of it we're on.
  */
 public final class DoomMap {
 
@@ -30,7 +30,7 @@ public final class DoomMap {
 
     public record Thing(int x, int y, int angle, int type, int flags) {}
 
-    /** One convex piece of a sector's floor plan: map-space vertices and the owning sector. */
+    /** One convex piece of a sector's floorplan: doom-space vertices + owner. */
     public record SubPoly(double[] xs, double[] ys, int sector) {}
 
     public final List<Sector> sectors = new ArrayList<>();
@@ -40,19 +40,17 @@ public final class DoomMap {
     private int[] sectorTags = new int[0];
     private int[] sectorSpecials = new int[0];
 
-    // Current sector heights, which doors, lifts and moving floors change at runtime. The
-    // parsed Sector records keep the values as authored, while movement, combat and
-    // rendering all read the current ones.
+    // LIVE sector heights: doors/lifts/floors move these; the parsed Sector
+    // records keep the as-authored values. Everything that walks, shoots or
+    // renders reads the live numbers.
     private int[] liveFloor = new int[0];
     private int[] liveCeil = new int[0];
-    // Current floor flat and sector special. The change-on-arrival floor specials copy a
-    // neighbouring sector's flat and special onto this one when the floor reaches its
-    // target, so that a floor lowering into a damaging pit becomes damaging itself. The
-    // parsed values remain as authored.
+    // LIVE floor flat + sector special: the "…AndChange" floor specials copy a
+    // neighbour's flat/special onto a sector when the floor arrives (e.g. a floor that
+    // lowers into a lava pit BECOMES lava). Parsed Sector.floorFlat() stays as-authored.
     private String[] liveFloorFlat = new String[0];
     private int[] liveSpecial = new int[0];
-    /** Lines whose switch texture has been flipped to its pressed state, read by the
-     * mesh builder. */
+    /** Switch lines whose texture has flipped SW1->SW2 (renderer consults). */
     public final java.util.Set<Integer> switchedLines =
         java.util.concurrent.ConcurrentHashMap.newKeySet();
 
@@ -75,7 +73,7 @@ public final class DoomMap {
         return sector >= 0 && sector < sectorSpecials.length ? sectorSpecials[sector] : 0;
     }
 
-    /** The current floor flat, falling back to the authored value before any change. */
+    /** The live floor flat (falls back to the parsed value before any AndChange swap). */
     public String floorFlatNow(int sector) {
         if (sector >= 0 && sector < liveFloorFlat.length && liveFloorFlat[sector] != null) {
             return liveFloorFlat[sector];
@@ -89,8 +87,7 @@ public final class DoomMap {
         }
     }
 
-    /** The current sector special; change-on-arrival floors modify it, while light effects
-     * are spawned from the authored value. */
+    /** The live sector special (AndChange floors mutate this; light spawn uses the parsed one). */
     public int sectorSpecialNow(int sector) {
         return sector >= 0 && sector < liveSpecial.length ? liveSpecial[sector] : 0;
     }
@@ -101,8 +98,7 @@ public final class DoomMap {
         }
     }
 
-    /** Resets to the authored state for a freshly loaded level: doors closed, lifts raised
-     * and switches unpressed. */
+    /** A fresh level rises: every door shut, every lift up, every switch unpressed. */
     public void resetLive() {
         for (int i = 0; i < liveFloor.length; i++) {
             liveFloor[i] = sectors.get(i).floorH();
@@ -113,8 +109,8 @@ public final class DoomMap {
         switchedLines.clear();
     }
 
-    // Raw BSP data, present when the map provides SEGS, SSECTORS and NODES.
-    private int[] segV1, segV2, segLine, segSide;
+    // raw BSP (present when the map lumps carry SEGS/SSECTORS/NODES)
+    private int[] segV1, segV2, segLine, segSide, segOfs;
     private int[] ssNumSegs, ssFirstSeg;
     private int[] ndX, ndY, ndDx, ndDy, ndRight, ndLeft;
     private int[] vertX, vertY;
@@ -144,6 +140,77 @@ public final class DoomMap {
                 }
             }
         }
+    }
+
+    /** Whether this map carries usable BSP lumps. */
+    public boolean hasBsp() {
+        return segV1 != null && ssFirstSeg != null && ndX != null;
+    }
+
+    public double segX1(int seg) {
+        return vertX[segV1[seg]];
+    }
+
+    public double segY1(int seg) {
+        return vertY[segV1[seg]];
+    }
+
+    public double segX2(int seg) {
+        return vertX[segV2[seg]];
+    }
+
+    public double segY2(int seg) {
+        return vertY[segV2[seg]];
+    }
+
+    public int segLine(int seg) {
+        return segLine[seg];
+    }
+
+    public int segSide(int seg) {
+        return segSide[seg];
+    }
+
+    public int segOffset(int seg) {
+        return segOfs[seg];
+    }
+
+    private int[][] sectorSegs;
+
+    /**
+     * Seg indices grouped by the sector the BSP says each subsector belongs to. This is
+     * the renderer's truth: on a trick map a seg can face a different sector than its
+     * sidedef record claims, and the software renderer draws the BSP's answer.
+     */
+    public synchronized int[][] sectorSegs() {
+        if (sectorSegs != null) {
+            return sectorSegs;
+        }
+        final List<List<Integer>> bySector = new java.util.ArrayList<>();
+        for (int i = 0; i < sectors.size(); i++) {
+            bySector.add(new java.util.ArrayList<>());
+        }
+        if (hasBsp()) {
+            for (int ss = 0; ss < ssFirstSeg.length; ss++) {
+                int sector = -1;
+                for (int i = 0; i < ssNumSegs[ss] && sector < 0; i++) {
+                    final int seg = ssFirstSeg[ss] + i;
+                    final Line l = lines.get(segLine[seg]);
+                    sector = segSide[seg] == 0 ? l.frontSector() : l.backSector();
+                }
+                if (sector < 0 || sector >= bySector.size()) {
+                    continue;
+                }
+                for (int i = 0; i < ssNumSegs[ss]; i++) {
+                    bySector.get(sector).add(ssFirstSeg[ss] + i);
+                }
+            }
+        }
+        sectorSegs = new int[bySector.size()][];
+        for (int i = 0; i < bySector.size(); i++) {
+            sectorSegs[i] = bySector.get(i).stream().mapToInt(Integer::intValue).toArray();
+        }
+        return sectorSegs;
     }
 
     private int skyLine(int sector) {
@@ -197,22 +264,22 @@ public final class DoomMap {
     public int minX = Integer.MAX_VALUE, minY = Integer.MAX_VALUE;
     public int maxX = Integer.MIN_VALUE, maxY = Integer.MIN_VALUE;
 
-    /** A source of a map's named lumps, backed by a WAD loaded at runtime. */
+    /** A source of a map's named lumps — baked resources OR an external runtime WAD. */
     @FunctionalInterface
     public interface LumpSource {
         ByteBuffer get(String lumpName) throws IOException;
     }
 
     public static DoomMap load(String mapName) throws IOException {
-        // No maps are bundled with the mod: every level comes from a WAD the user supplied.
-        throw new IOException("no bundled map '" + mapName + "': use a wadId#MAP reference");
+        // Latte Doom has no baked maps — every level comes from a real WAD ("wadId#MAP" refs).
+        throw new IOException("no baked map '" + mapName + "' — use a wadId#MAP reference");
     }
 
     /**
-     * Resolves a map reference of the form {@code wadId#MAPNAME}, loading the map from the
-     * runtime WAD registered under that identifier, which is the same handle on the client
-     * and on the integrated server. This is the single entry point used by everything that
-     * raises a level.
+     * Resolve a map reference: a plain baked name ("e1m1") loads from resources; a
+     * "wadId#MAPNAME" reference loads from the runtime WAD registered under wadId (the
+     * same handle on both client and integrated server). This is the single entry point
+     * for everything that raises a level, so external WADs Just Work everywhere.
      */
     public static DoomMap loadRef(String ref) throws IOException {
         final int hash = ref.indexOf('#');
@@ -319,7 +386,7 @@ public final class DoomMap {
         map.vertX = vx;
         map.vertY = vy;
 
-        // BSP data, when the map provides SEGS, SSECTORS and NODES.
+        // BSP, when present (SEGS + SSECTORS + NODES)
         try {
             final ByteBuffer sg = src.get("segs");
             final int nSegs = sg.remaining() / 12;
@@ -327,13 +394,14 @@ public final class DoomMap {
             map.segV2 = new int[nSegs];
             map.segLine = new int[nSegs];
             map.segSide = new int[nSegs];
+            map.segOfs = new int[nSegs];
             for (int i = 0; i < nSegs; i++) {
                 map.segV1[i] = sg.getShort() & 0xFFFF;
                 map.segV2[i] = sg.getShort() & 0xFFFF;
                 sg.getShort(); // angle
                 map.segLine[i] = sg.getShort() & 0xFFFF;
                 map.segSide[i] = sg.getShort() & 0xFFFF;
-                sg.getShort(); // offset
+                map.segOfs[i] = sg.getShort(); // texture start along the linedef
             }
             final ByteBuffer ss = src.get("ssectors");
             final int nSs = ss.remaining() / 4;
@@ -361,7 +429,7 @@ public final class DoomMap {
                 map.ndLeft[i] = nd.getShort() & 0xFFFF;
             }
         } catch (IOException noBsp) {
-            // Map data without BSP lumps: the mesh builder has no fallback polygons.
+            // raster-only map data; the mesh renderer just won't have polys
         }
 
         final ByteBuffer th = src.get("things");
@@ -384,7 +452,7 @@ public final class DoomMap {
                 final double d = xi - x;
                 if (d > 1.0e-6 && d < best) {
                     best = d;
-                    // Upward line: its front side faces +x, so the point lies on its back side.
+                    // upward line: its right (front) side faces +x, so we sit on its back
                     sector = l.y2 > l.y1 ? l.backSector : l.frontSector;
                 }
             }
@@ -394,7 +462,7 @@ public final class DoomMap {
 
     private int minFloorCache = Integer.MAX_VALUE, maxCeilCache = Integer.MIN_VALUE;
 
-    /** The level's lowest base floor height: the bottom of its vertical extent. */
+    /** The level's lowest base floor height — the bottom of its vertical extent. */
     public int minFloor() {
         if (minFloorCache == Integer.MAX_VALUE) {
             for (Sector s : sectors) {
@@ -404,7 +472,7 @@ public final class DoomMap {
         return minFloorCache;
     }
 
-    /** The level's highest base ceiling height: the top of its vertical extent. */
+    /** The level's highest base ceiling height — the top of its vertical extent. */
     public int maxCeil() {
         if (maxCeilCache == Integer.MIN_VALUE) {
             for (Sector s : sectors) {
@@ -415,11 +483,11 @@ public final class DoomMap {
     }
 
     /**
-     * The sector of the subsector polygon containing the point, or -1 outside
-     * the map, matching {@code R_PointInSubsector}. Unlike {@link #sectorAt}, which takes
-     * the nearest crossing in the +x direction, this never returns a sector for a point
-     * beyond the walls or inside a solid pillar, so a thing authored outside the map is
-     * discarded rather than spawned in mid-air.
+     * R_PointInSubsector-accurate: the sector of the subsector polygon that
+     * actually contains (x,y), or -1 for the void. Unlike sectorAt() (nearest
+     * +x crossing), this never invents a sector for a point outside the walls or
+     * inside a solid pillar column, so a Thing authored in the void is dropped
+     * rather than spawned as a floating monster.
      */
     public int sectorAtPoly(double x, double y) {
         for (SubPoly sp : subsectorPolys()) {
@@ -445,7 +513,7 @@ public final class DoomMap {
 
     private List<List<Line>> sectorLines;
 
-    /** Every linedef touching this sector: the adjacency P_RecursiveSound floods along. */
+    /** Every linedef touching this sector — the adjacency P_RecursiveSound floods along. */
     public synchronized List<Line> linesOf(int sector) {
         if (sectorLines == null) {
             sectorLines = new ArrayList<>(sectors.size());
@@ -466,7 +534,7 @@ public final class DoomMap {
 
     /**
      * The subsector floorplans: the map bounding box clipped down the BSP by
-     * each node's partition half-plane, then by the leaf's own segs: every
+     * each node's partition half-plane, then by the leaf's own segs — every
      * piece convex by construction (this is how GL nodes are born).
      */
     public synchronized List<SubPoly> subsectorPolys() {
@@ -486,17 +554,17 @@ public final class DoomMap {
         return polys;
     }
 
-    // The SectorTriangulator and LatteMesh path shares vertices by construction, so no
-    // wall-edge welding is needed for it. subsectorPolys below remains as the fallback for
-    // sectors that fail to triangulate, and as the probe's area cross-check.
+    // (The old wall-edge weld machinery — onLineVertices — is gone with DoomLevelGeometry:
+    // the SectorTriangulator/LatteMesh path shares vertices by construction. subsectorPolys
+    // below survives ONLY as the broken-sector fallback + the probe's area cross-check.)
 
     /**
      * Weld T-junctions between adjacent subsector floor/ceiling polygons. Each BSP leaf is
-     * clipped independently, so a partition/seg split can drop a vertex into the middle of a
-     * neighbour's straight edge. The GPU then fills the straight edge and the two-segment
-     * edge differently, leaving a hairline crack, clustered at corners. For every polygon
-     * edge, any other polygon's vertex lying on it within a tight perpendicular tolerance is
-     * inserted at that vertex's exact coordinates, so both polygons share an identical point.
+     * clipped independently, so a partition/seg split can drop a vertex into the MIDDLE of a
+     * neighbour's straight edge — the GPU then fills the straight edge and the two-segment
+     * edge differently, leaving a hairline see-through crack (clustered at corners). Fix: for
+     * every polygon edge, insert any OTHER polygon's vertex that lies on it (tight perpendicular
+     * tolerance) at that vertex's EXACT coords, so the two polygons share a bit-identical point.
      * Inserted points are collinear, so area()/pointInPoly()/sectorAtPoly() are unchanged, and no
      * vertex is moved (which would open a new floor↔wall-base crack).
      */
@@ -504,11 +572,11 @@ public final class DoomMap {
         if (polys.size() < 2) {
             return;
         }
-        // A T-junction vertex is welded within this perpendicular distance of an edge. 1/64 is
-        // too tight: in a deep BSP tree one side of a junction comes from a long chain of clip()
-        // divides and the other from a raw integer vertex, and the two can differ by more than
-        // that, leaving the crack in place. 0.1 map units is still sub-pixel at the /32 world
-        // scale and tolerates the floating-point drift.
+        // A T-junction vertex is welded if within this perpendicular distance of an edge. 1/64 was
+        // too tight: deep BSP trees compute a junction via a long chain of clip() divides on one
+        // side and a raw integer vertex on the other, and the two can disagree by more than 1/64,
+        // so the weld failed and a hairline see-through crack stayed. 0.1u is still sub-pixel after
+        // the /32 world scale (invisible) but robust to that FP drift.
         final double perp = 0.1;          // max off-edge distance to weld (doom units)
         final double cell = 64.0;         // spatial-hash cell size
         final java.util.Map<Long, List<double[]>> grid = new java.util.HashMap<>();
@@ -538,7 +606,7 @@ public final class DoomMap {
                     }
                     final double dx2 = v[0] - (ax + t * ex), dy2 = v[1] - (ay + t * ey);
                     if (dx2 * dx2 + dy2 * dy2 > perp * perp) {
-                        continue; // not on this edge
+                        continue; // not actually on this edge
                     }
                     ins.add(new double[]{t, v[0], v[1]});
                 }
@@ -601,7 +669,7 @@ public final class DoomMap {
             emitSubsector(child & 0x7FFF, poly);
             return;
         }
-        // Right child = front (side 0) = cross <= 0 half-plane
+        // right child = front (side 0) = cross <= 0 half-plane
         descend(ndRight[child], clip(poly, ndX[child], ndY[child], ndDx[child], ndDy[child], true));
         descend(ndLeft[child], clip(poly, ndX[child], ndY[child], ndDx[child], ndDy[child], false));
     }
@@ -613,16 +681,16 @@ public final class DoomMap {
             final int seg = ssFirstSeg[ss] + i;
             final int x1 = vertX[segV1[seg]], y1 = vertY[segV1[seg]];
             final int x2 = vertX[segV2[seg]], y2 = vertY[segV2[seg]];
-            // The subsector lies on the seg's right side (v1->v2)
+            // the subsector lies on the seg's right side (v1->v2)
             poly = clip(poly, x1, y1, x2 - x1, y2 - y1, true);
             if (sector < 0) {
                 final Line l = lines.get(segLine[seg]);
                 sector = segSide[seg] == 0 ? l.frontSector() : l.backSector();
             }
         }
-        // Drop numerical noise only, not real geometry. A threshold of 1.0 discards legitimate
-        // thin subsectors, since a 2x1 triangle has area 1.0, which leaves no floor or ceiling
-        // there and shows a hole through the level. Dense geometry produces many such slivers.
+        // Drop only true numerical noise, not real geometry: the old > 1.0 threshold discarded
+        // legitimately small/thin subsectors (a 2x1 triangle is area 1.0), leaving no floor/ceiling
+        // there — a see-through hole to the void. SIGIL's dense geometry has many such slivers.
         if (sector >= 0 && poly.size() >= 3 && Math.abs(area(poly)) > 1.0e-3) {
             final double[] xs = new double[poly.size()];
             final double[] ys = new double[poly.size()];
@@ -634,7 +702,7 @@ public final class DoomMap {
         }
     }
 
-    /** Sutherland-Hodgman: keep the side of (ox,oy)+(dx,dy) with cross<=0 (right) or >0. */
+    /** Sutherland–Hodgman: keep the side of (ox,oy)+(dx,dy) with cross<=0 (right) or >0. */
     private static List<double[]> clip(List<double[]> poly, double ox, double oy,
                                        double dx, double dy, boolean keepRight) {
         final List<double[]> out = new ArrayList<>(poly.size() + 2);
@@ -670,7 +738,7 @@ public final class DoomMap {
     private static ByteBuffer lump(String path) throws IOException {
         try (InputStream in = DoomMap.class.getResourceAsStream(path)) {
             if (in == null) {
-                throw new IOException("Missing map lump " + path + ": run gradlew extractAssets");
+                throw new IOException("Missing map lump " + path + " — run gradlew extractAssets");
             }
             return ByteBuffer.wrap(in.readAllBytes()).order(ByteOrder.LITTLE_ENDIAN);
         }

@@ -13,25 +13,22 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * A WAD file read at runtime: its header and its directory of named lumps, kept in memory
- * so that any map's geometry lumps can be handed to {@link DoomMap}. Reading WADs at
- * runtime is what allows the mod to load whichever files the player supplies, and is
- * required because no game data ships with the mod. Loaded WADs are cached by identifier
- * so that the client and the integrated server, which share a JVM, share one copy.
+ * A DOOM WAD read at RUNTIME (not the build-time extractor): header + directory of named
+ * lumps, kept in memory so any map's geometry lumps can be handed to {@link DoomMap}. This
+ * is what lets the mod load an arbitrary external .wad the player drops in, not just the
+ * maps baked into the mod's resources. Loaded WADs are cached by id so client + integrated
+ * server (same JVM) share one copy.
  */
 public final class WadFile {
 
     /** src = index into {@link #sources}: which loaded file this lump's bytes live in
-     * (0 is the base WAD, 1 and above are patch WADs in load order), which allows one
-     * instance to represent several merged files. */
+     * (0 = the IWAD, 1.. = PWADs in load order). Lets one WadFile MERGE several files. */
     public record Lump(String name, int pos, int size, int src) {}
 
-    // Load order: index 0 is the base WAD, followed by each patch WAD. Every lump records
-    // the index of the file it came from.
+    // load order: sources.get(0) = IWAD, then each PWAD. Lumps carry their source index.
     private final List<byte[]> sources;
     public final List<Lump> lumps = new ArrayList<>();
-    // Last definition wins, so a patch WAD's lump overrides the base WAD's, which is the
-    // engine's own merge order.
+    // last-wins so a PWAD lump overrides the IWAD's (DOOM's own merge order)
     private final Map<String, Lump> byName = new LinkedHashMap<>();
 
     private static final Map<String, WadFile> CACHE = new java.util.concurrent.ConcurrentHashMap<>();
@@ -52,11 +49,10 @@ public final class WadFile {
     }
 
     /**
-     * Reads and caches a base WAD with patch WADs merged on top. Later files override
-     * earlier ones by lump name and map markers resolve to the last file that defines
-     * them, which is how a source port's {@code -file} load order behaves. The engine
-     * loads the same set through {@code -file}; this is the rendering side's copy, so the
-     * added maps and artwork are drawn as well.
+     * Read + cache an IWAD with PWADs merged on top (SIGIL etc.). Later files override
+     * earlier ones by lump name, and map markers resolve PWAD-first — exactly how a
+     * source port's -file load order works. The engine loads the same set via -file;
+     * this is the client-side mirror so the extra maps and art actually render.
      */
     public static WadFile loadMerged(String id, Path iwad, List<Path> pwads) throws IOException {
         final WadFile existing = CACHE.get(id);
@@ -82,8 +78,8 @@ public final class WadFile {
         return CACHE.get(id);
     }
 
-    /** Drops a cached merged set, so that swapping WAD sets at runtime does not leave
-     * earlier ones resident. */
+    /** Drop a cached merged set (the /doomwad reload path — old generations must not
+     * pile up in memory when the user swaps WAD sets). */
     public static void evict(String id) {
         CACHE.remove(id);
     }
@@ -124,8 +120,8 @@ public final class WadFile {
         }
     }
 
-    /** Index of a map's marker lump ({@code ExMy} or {@code MAPxx}), or -1 if absent.
-     * Returns the last match, so a patch WAD replacing a stock map takes precedence. */
+    /** Index of a map's marker lump (ExMy / MAPxx), or -1 if absent. Returns the LAST
+     * match so a PWAD that replaces a stock map wins over the IWAD's copy. */
     public int markerOf(String mapName) {
         final String want = mapName.toUpperCase(Locale.ROOT);
         for (int i = lumps.size() - 1; i >= 0; i--) {
@@ -136,7 +132,7 @@ public final class WadFile {
         return -1;
     }
 
-    /** A map's sub-lump (VERTEXES, LINEDEFS, ...) as a little-endian buffer, or null if absent. */
+    /** A map's sub-lump (VERTEXES, LINEDEFS, …) as a little-endian buffer, or null if absent. */
     public ByteBuffer mapLump(int markerIdx, String lumpName) {
         final String want = lumpName.toUpperCase(Locale.ROOT);
         for (int i = markerIdx + 1; i <= markerIdx + 11 && i < lumps.size(); i++) {
@@ -150,8 +146,8 @@ public final class WadFile {
         return null;
     }
 
-    /** Whether this WAD contains a lump with this name, map markers included, which is how
-     * DOOM 1 and DOOM 2 naming is told apart: E1M1 exists in one, MAP01 in the other. */
+    /** Does this WAD contain a lump with this name? (Map markers included — the DOOM 1
+     * vs DOOM 2 naming probe: E1M1 exists in one, MAP01 in the other.) */
     public boolean hasLump(String name) {
         return byName.containsKey(name.toUpperCase(Locale.ROOT));
     }

@@ -11,14 +11,15 @@ import java.nio.file.StandardOpenOption;
 import java.util.ArrayDeque;
 
 /**
- * Ring-buffer recorder for motion problems, which span three clocks (Minecraft's tick, the
- * engine's tic and the frame rate) and are hard to pin down from a single observation.
+ * The flight recorder. Every interesting lane records one compact line into
+ * a ring buffer: player position each tick, the rider pin each frame, every glue snap,
+ * every rideFloor carry, every setPos/teleport with its caller, every session flag flip.
  *
- * <p>Records positions, floor carries, position writes with their caller and state changes.
- * On an anomaly, a vertical move over one block in a frame, over four blocks in a tick, or a
- * dimension change, the last two seconds are written to {@code logs/lattedoom-diag.log}
- * under the trigger. Always on, one formatted string per event; {@code /doomdiag} dumps on
- * demand.
+ * When something ANOMALOUS happens — the player moves more than a block within a single
+ * frame, more than four blocks within a tick, or changes dimension — the whole last ~2
+ * seconds of the buffer is dumped to logs/lattedoom-diag.log with a marker naming the
+ * trigger. One repro = the full story, in order, with timestamps. /doomdiag dumps
+ * manually; recording is always on (cost is one formatted string per event).
  */
 public final class DoomDiag {
 
@@ -30,9 +31,9 @@ public final class DoomDiag {
     private static String lastDim = "";
     private static long lastDumpMs;
 
-    /** Records an important event: a command, level transition, engine state change or
-     * error: into the ring buffer and writes it straight to the log file, so the log is
-     * a complete chronological account even when no anomaly dump fires. */
+    /** IMPORTANT event: into the ring AND written through to the file immediately —
+     * commands, level transitions, engine state, errors. The diag file reads as the
+     * session's chronological story even without an anomaly dump. */
     public static synchronized void logNow(String lane, String msg) {
         rec(lane, msg);
         try {
@@ -56,8 +57,7 @@ public final class DoomDiag {
 
     private static boolean headerWritten;
 
-    /** Records one event line into the ring buffer. The lane is a short tag such as
-     * {@code pin}, {@code glue}, {@code tp} or {@code tick}. */
+    /** One event line into the ring. lane = short tag ("pin", "glue", "tp", "tick"...). */
     public static synchronized void rec(String lane, String msg) {
         if (RING.size() >= CAPACITY) {
             RING.pollFirst();
@@ -66,8 +66,7 @@ public final class DoomDiag {
         RING.addLast(String.format("%10.4f %-6s %s", t, lane, msg));
     }
 
-    /** Records the player's state once per client tick and runs the tick-scale anomaly
-     * check (large displacement or a dimension change). */
+    /** Per-CLIENT-TICK player snapshot + the tick-scale anomaly check. */
     public static void tickPlayer(Minecraft mc) {
         if (mc.player == null) {
             return;
@@ -93,8 +92,8 @@ public final class DoomDiag {
         lastDim = dim;
     }
 
-    /** Per-frame vertical watch, called from the moving-floor rider path. A vertical move
-     * greater than one block within a single frame is never legitimate. */
+    /** Per-FRAME vertical watch (called from the rider pin path — the hot lane in the
+     * platform reports). A >1-block Y move within one frame is never legitimate. */
     public static void framePlayerY(double y, String context) {
         if (!Double.isNaN(lastFrameY) && Math.abs(y - lastFrameY) > 1.0) {
             rec("frame", String.format("Y POP %.2f -> %.2f (%s)", lastFrameY, y, context));
@@ -103,16 +102,14 @@ public final class DoomDiag {
         lastFrameY = y;
     }
 
-    /** Suppresses the next anomaly check for an intended position change, such as a warp
-     * delivery or teleporter follow, and records the reason. */
+    /** Reset the frame watch (teleports that are INTENDED — warp deliveries). */
     public static void expectJump(String why) {
         rec("intent", why);
         lastFrameY = Double.NaN;
         lastTickX = Double.NaN;
     }
 
-    /** Flushes the ring buffer to {@code logs/lattedoom-diag.log} under a marker naming
-     * the trigger. Rate-limited so a repeating anomaly cannot flood the log. */
+    /** Flush the ring to logs/lattedoom-diag.log with a trigger marker. Rate-limited. */
     public static synchronized void dump(String trigger) {
         final long now = System.currentTimeMillis();
         if (now - lastDumpMs < 1500) {

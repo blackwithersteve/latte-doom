@@ -9,12 +9,11 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * DOOM has no food, so the hunger system is held still while a player is transformed: no
- * natural regeneration, no saturation top-ups, no hunger drain and no starvation damage.
- * Health then changes only through the DOOM paths: engine damage removes it, medikits and
- * soulspheres restore it, and a level restart refills it. Without this, Minecraft's own
- * regeneration would undo the engine's damage. Players not on the roster keep vanilla
- * hunger.
+ * DOOM has no food: while transformed, the whole hunger system stands still — no natural
+ * regeneration, no saturation top-ups, no
+ * hunger drain, no starvation. Health moves ONLY through the DOOM lanes: engine damage
+ * bills hearts, medikits/soulspheres heal them, the reborn refills them. Plain Steve
+ * (off-roster) keeps vanilla hunger untouched.
  */
 @Mixin(FoodData.class)
 public abstract class MarineFoodMixin {

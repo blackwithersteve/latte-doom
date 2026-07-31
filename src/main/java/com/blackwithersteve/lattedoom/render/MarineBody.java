@@ -12,15 +12,11 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * Draws a transformed player as a billboard built from the WAD's own {@code PLAY} sprites
- * instead of the Minecraft player model. This is what other players and the third-person
- * camera see.
- *
- * <p>Frame selection follows the engine's {@code S_PLAY_*} state timings: standing frame
- * A, running A to D every 4 tics, attacking E, pain G, and the view is chosen with DOOM's
- * eight-rotation rule relative to the camera. Feet are anchored at the entity origin, with
- * the same clipping lift the world sprites use. All sprite pixels come from the runtime
- * texture compositor, so nothing is shipped with the mod.
+ * The transformed player's BODY: the WAD's own PLAY marine billboard in place of the
+ * Steve model — what other players and the F5 camera see. Frame logic mirrors the
+ * S_PLAY_* state timings (stand A, run ABCD every 4 tics, attack E, pain G); rotation is
+ * DOOM's 8-view pick against the camera; feet anchor at the entity origin with the
+ * smart-clip lift. Sprites come from the runtime compositor — nothing shipped.
  */
 public final class MarineBody {
 
@@ -34,12 +30,11 @@ public final class MarineBody {
         if (sprites == null) {
             return;
         }
-        // Derive the S_PLAY frame from the render state: the engine does not animate a
-        // mirrored player object, so the animation is reconstructed here.
+        // S_PLAY frame from the render state (engine can't animate the mirrored mobj)
         final int frameIdx;
         if (state.deathTime > 0) {
-            // S_PLAY_DIE1..7, frames H to N: Minecraft's 20 death ticks are spread across
-            // the seven frames, and the final corpse frame holds until respawn.
+            // S_PLAY_DIE1..7: frames H..N — the marine crumples and stays down. MC's 20
+            // death ticks spread across the 7 frames; N (the corpse) holds at the end.
             frameIdx = 'h' - 'a' + Math.min(6, (int) (state.deathTime * 7.0f / 20.0f));
         } else if (state.attackTime > 0.01f) {
             frameIdx = 'e' - 'a';
@@ -51,10 +46,11 @@ public final class MarineBody {
             frameIdx = 0;
         }
 
-        // Eight-rotation view pick, in map-space degrees. The render state splits rotation
-        // in two, an absolute body angle and a head yaw relative to it, so the look direction
-        // is their sum. A sprite has no separate head and must face that sum: the body angle
-        // alone lags the look direction, and the head yaw alone never moves at all.
+        // DOOM's 8-rotation pick, in doom-space degrees. The render state splits rotation:
+        // bodyRot is absolute, yRot is the HEAD's yaw RELATIVE to it (what the head model
+        // needs) — absolute look direction is their sum. A DOOM marine has no neck: the
+        // whole sprite faces where the player looks, the instant they look. (Using yRot
+        // alone froze remote marines' facing; bodyRot alone lagged the head by ~50°.)
         final double mAngle = -(state.bodyRot + state.yRot) - 90.0;
         final double camDx = LatteWorld.worldToDoomX(camera.pos.x);
         final double camDy = LatteWorld.worldToDoomY(camera.pos.z);
@@ -81,7 +77,7 @@ public final class MarineBody {
         final int w = size[0], h = size[1];
         final int leftOfs = ofs[0];
 
-        // Billboard axes in world space, emitted in the entity-local pose (translation-only)
+        // billboard axes in world space, emitted in the entity-local pose (translation-only)
         final double rxD = vdy / dist, ryD = -vdx / dist; // viewer's right, doom space
         final float rx = (float) (rxD / LatteWorld.UNITS);
         final float rz = (float) (-ryD / LatteWorld.UNITS);
@@ -90,15 +86,15 @@ public final class MarineBody {
         final float x1 = (float) (rx * l1), z1 = (float) (rz * l1);
         double top = ofs[1], bottom = ofs[1] - h;
         if (bottom < 0) {
-            top -= bottom; // keep the feet on the ground
+            top -= bottom; // feet on the ground (smart clip)
             bottom = 0;
         }
         final float yT = (float) (top / LatteWorld.UNITS);
         final float yB = (float) (bottom / LatteWorld.UNITS);
         final float u0 = view.flip() ? 1 : 0, u1 = view.flip() ? 0 : 1;
 
-        // Sector light applies only inside a level. Outside one, the same projection would
-        // sample whatever room the position happens to map onto, so daylight is used.
+        // sector light only applies INSIDE the level — an overworld marine was picking
+        // up whatever dark room its position happened to project into. Daylight outside.
         final int c;
         if (LatteWorld.insideLevel(state.x, state.y, state.z)) {
             final int sec = LatteWorld.map() != null ? LatteWorld.map().sectorAt(meDx, meDy) : -1;

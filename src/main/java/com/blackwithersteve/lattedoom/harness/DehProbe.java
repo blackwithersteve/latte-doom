@@ -16,22 +16,22 @@ import deh.DehPatch;
 import deh.DehState;
 
 /**
- * Parses and applies a DEHACKED/BEX patch against the real static tables without booting the
- * engine. Accepts a {@code .deh}, {@code .bex} or {@code .wad}, applying every DEHACKED lump
- * in order, and prints the resulting counts. Exits 0 with {@code DEH PROBE OK} when nothing
- * failed to parse.
+ * Standalone DEHACKED/BEX parser+applier proof (no engine boot, no wad init).
  *
- * <p>{@code ./gradlew dehProbe -PdehFile=/path/to/patch.deh}
+ * Feed it a .deh/.bex text file or a .wad (every DEHACKED lump inside is used, in
+ * order). It parses, applies against the real static tables (things/frames/codeptr/
+ * sprites — the game-instance homes are skipped), and prints the counts. Exits 0 and
+ * prints "DEH PROBE OK" when parsing produced zero problems.
+ *
+ * Default target: Eviternity's DEHACKED, the M-BOOM slice 7 acceptance wad.
  */
 public final class DehProbe {
 
+    private static final String DEFAULT_WAD =
+        "Eviternity.wad";
+
     public static void main(String[] args) throws IOException {
-        if (args.length == 0 || args[0].isEmpty()) {
-            System.err.println("DehProbe: pass a .deh, .bex or .wad path "
-                + "(gradle: -PdehFile=/path/to/patch.deh)");
-            System.exit(2);
-        }
-        final Path path = Path.of(args[0]);
+        final Path path = Path.of(args.length > 0 ? args[0] : DEFAULT_WAD);
         if (!Files.exists(path)) {
             System.err.println("DehProbe: no such file: " + path);
             System.exit(2);
@@ -66,7 +66,7 @@ public final class DehProbe {
             }
             totalProblems += p.problems.size();
 
-            // Real application against the static tables (DOOM == null: HU/pars homes skipped)
+            // real application against the static tables (DOOM == null: HU/pars homes skipped)
             DehLoader.applyText(text, null);
         }
 
@@ -75,7 +75,7 @@ public final class DehProbe {
             + " sprnames=" + DehState.sprnames().length
             + " dehActive=" + DehState.active);
 
-        // Spot checks: a patched extension state and the MBF thing slots, if present
+        // spot checks: a patched extension state and the MBF thing slots, if present
         if (info.states.length > 1073) {
             final data.state_t st = info.states[1073];
             System.out.println("sample state 1073: sprite=" + st.dehSpriteNum() + " ("
