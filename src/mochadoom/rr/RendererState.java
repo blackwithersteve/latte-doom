@@ -2325,6 +2325,13 @@ public abstract class RendererState<T, V> implements SceneRenderer<T, V>, ILimit
     @Override
     @R_Draw.C(R_FillBackScreen)
     public void FillBackScreen() {
+        // Latte Doom: the software back screen is never presented (the world is the
+        // renderer), and this border refresh crashes mid-savegame when the scaled
+        // border arithmetic pushes patch coords negative ("Invalid coordinates
+        // (-9, -9)" from DoSaveGame with a sub-full view). Dead weight — skip it.
+        if (true) {
+            return;
+        }
         final boolean scaleSetting = Engine.getConfig().equals(Settings.scale_screen_tiles, Boolean.TRUE);
         flat_t src;
         DoomScreen dest;
@@ -2848,7 +2855,7 @@ public abstract class RendererState<T, V> implements SceneRenderer<T, V>, ILimit
 
         for (th = DOOM.actions.getThinkerCap().next; th != DOOM.actions.getThinkerCap(); th = th.next) {
             if (th.thinkerFunction == P_MobjThinker) {
-                // Latte Doom patch: DEH: true sprite index (MBF sprites 138+)
+                // Latte Doom additive patch — DEH: true sprite index (MBF sprites 138+)
                 final mobj_t mo = (mobj_t) th;
                 final int sprnum = mo.mobj_spritenum >= 0 ? mo.mobj_spritenum : mo.mobj_sprite.ordinal();
                 if (sprnum < spritepresent.length) {

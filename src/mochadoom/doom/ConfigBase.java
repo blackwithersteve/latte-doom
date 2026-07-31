@@ -121,7 +121,7 @@ public enum ConfigBase {
         }
         
         /**
-         * Latte Doom patch: the embedding host points this at Minecraft's config dir
+         * Cocoa Doom: the embedding host points this at Minecraft's config dir
          * (with trailing separator) before the engine boots, so default.cfg and
          * mochadoom.cfg don't land in the game's working directory.
          */

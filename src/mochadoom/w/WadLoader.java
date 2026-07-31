@@ -783,7 +783,7 @@ public class WadLoader implements IWadLoader {
 							((patch_t) lumpcache[lump]).name = this.lumpinfo[lump].name;
 						}
 					} else {
-						// Latte Doom patch: the original code cast the raw ByteBuffer to
+						// Cocoa Doom: the original code cast the raw ByteBuffer to
 						// CacheableDoomObject here, which always threw ClassCastException
 						// at runtime (swallowed by the catch below). JDK 25 rejects the
 						// cast statically (sealed Buffer hierarchy), so keep the old net

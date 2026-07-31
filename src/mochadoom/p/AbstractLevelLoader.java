@@ -146,10 +146,10 @@ public abstract class AbstractLevelLoader implements ILevelLoader {
             // invisible things don't go into the sector links
             sec = ss.sector;
 
-            // Latte Doom patch: never link a thing to itself. If it is already the head of
-            // this sector's list, after a missing or failed Unset, the vanilla code sets
-            // thing.snext = thing, a self-cycle that makes R_AddSprites loop forever and
-            // freezes the engine. Vanilla always Unsets first, so this guard is inert there.
+            // Latte Doom hardening: NEVER link a thing to itself. If it is already the head
+            // of this sector's list (a missing/failed Unset), the vanilla code would set
+            // thing.snext = thing — a self-cycle that spins R_AddSprites forever and freezes
+            // the whole engine. Vanilla always Unsets first, so this guard is a no-op there.
             if (sec.thinglist != thing) {
                 thing.sprev = null;
                 thing.snext = sec.thinglist;
@@ -176,7 +176,7 @@ public abstract class AbstractLevelLoader implements ILevelLoader {
             ) {
                 // Get said block.
                 link = blocklinks[blocky * bmapwidth + blockx];
-                // Latte Doom patch: hardening, same self-cycle guard as the sector list above,
+                // Latte Doom hardening: same self-cycle guard as the sector list above —
                 // linking thing.bnext = thing spins P_BlockThingsIterator forever (the
                 // monster-AI freeze). Already the head here? Leave the chain as-is.
                 if (link != thing) {

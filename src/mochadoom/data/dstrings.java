@@ -57,7 +57,7 @@ public class dstrings{
 
 
     // Misc. other strings.
-    // Latte Doom patch: not final, the embedding host prefixes this with its own save
+    // Cocoa Doom: not final — the embedding host prefixes this with its own save
     // directory at boot so .dsg files don't land in Minecraft's working directory.
     public static String SAVEGAMENAME=    "doomsav";
     

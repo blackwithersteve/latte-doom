@@ -4,11 +4,11 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * Latte Doom patch: DEHACKED/BEX string overrides.
+ * Latte Doom additive patch — DEHACKED/BEX string overrides (M-BOOM slice 7).
  *
  * Runtime side of BEX [STRINGS]. Most of mocha's text lives in englsh.java as
- * static final String constants, which javac inlines at every use site, so those can
- * never be patched at runtime. What is reachable is pushed into live tables by
+ * static final String CONSTANTS which javac inlines at every use site — those can
+ * never be patched at runtime. What IS reachable gets pushed into live tables by
  * DehLoader (HU level-name arrays, Finale text arrays); the rest lands here so that
  * marked hook sites (cast-call names, and any future ones) can consult it lazily.
  */

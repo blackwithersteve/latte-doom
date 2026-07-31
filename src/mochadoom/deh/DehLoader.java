@@ -25,7 +25,7 @@ import p.ActiveStates;
 import w.lumpinfo_t;
 
 /**
- * Latte Doom patch: DEHACKED/BEX applier.
+ * Latte Doom additive patch — DEHACKED/BEX applier (M-BOOM slice 7).
  *
  * Entry point is {@link #applyWadDehLumps}: called once at engine boot, after
  * W_Init loaded the wad set and before any table consumer runs (R_Init, P_Init,
@@ -462,8 +462,15 @@ public final class DehLoader {
             }
             final String which;
             switch (key) {
-                case "deselect frame": which = "down"; break;
-                case "select frame": which = "up"; break;
+                // DEH's names are inverted relative to what they read as: "Deselect frame"
+                // sets the UP state and "Select frame" the DOWN state. Reference appliers
+                // agree, and patches are internally consistent only this way round — the
+                // frame a patch names in Deselect carries A_Raise, its Select carries
+                // A_Lower. Mapping them intuitively raised weapons into A_Lower, which
+                // re-entered BringUpWeapon with pendingweapon already wp_nochange and
+                // indexed weaponinfo[] out of bounds at every commercial-game spawn.
+                case "deselect frame": which = "up"; break;
+                case "select frame": which = "down"; break;
                 case "bobbing frame": which = "ready"; break;
                 case "shooting frame": which = "atk"; break;
                 case "firing frame": which = "flash"; break;

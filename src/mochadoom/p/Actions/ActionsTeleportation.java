@@ -120,8 +120,8 @@ public interface ActionsTeleportation extends ActionsSectors {
 
                     thing.angle = m.angle;
                     thing.momx = thing.momy = thing.momz = 0;
-                    // Latte Doom patch: an actual move of the local player, voodoo dolls
-                    // excluded. The Minecraft side must follow or the mirror undoes it.
+                    // Latte: real move of the LOCAL player (voodoo dolls excluded) — the
+                    // Minecraft side must follow or the mirror undoes the teleport
                     if (thing.player != null && thing.player.mo == thing
                         && thing.player == DOOM().players[0]) {
                         mochadoom.Engine.PLAYER_TELEPORT_COUNT++;

@@ -171,11 +171,11 @@ public enum ActiveStates implements ThinkerStates{
     T_VerticalDoor(ActionFunctions::T_VerticalDoor, ThinkerConsumer.class),
     T_PlatRaise(ActionFunctions::T_PlatRaise, ThinkerConsumer.class),
     T_SlidingDoor(ActionFunctions::T_SlidingDoor, ThinkerConsumer.class),
-    // Latte Doom patch: Boom scroller thinker (walls/flats/carry conveyors)
+    // Latte Doom additive patch: Boom scroller thinker (walls/flats/carry conveyors)
     T_BoomScroll(ActionFunctions::T_BoomScroll, ThinkerConsumer.class),
-    // Latte Doom patch: Boom pusher thinker (wind 224 / current 225 / point 226)
+    // Latte Doom additive patch: Boom pusher thinker (wind 224 / current 225 / point 226)
     T_BoomPusher(ActionFunctions::T_BoomPusher, ThinkerConsumer.class),
-    // Latte Doom patch: Boom elevator thinker (floor+ceiling move together)
+    // Latte Doom additive patch: Boom elevator thinker (floor+ceiling move together)
     T_MoveElevator(ActionFunctions::T_MoveElevator, ThinkerConsumer.class);
     
     private final static Logger LOGGER = Loggers.getLogger(ActiveStates.class.getName());

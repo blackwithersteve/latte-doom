@@ -38,7 +38,7 @@ import static m.fixed_t.FixedMul;
 import static m.fixed_t.MAPFRACUNIT;
 
 /**
- * Latte Doom patch: BOOM GENERALIZED LINEDEFS (the heart of Boom compat).
+ * Latte Doom additive patch — BOOM GENERALIZED LINEDEFS (the heart of Boom compat).
  *
  * Port of Boom v2.02 p_genlin.c / p_spec.h into Mocha Doom's trait architecture.
  * Generalized specials live in 0x2F80..0x7FFF: parameterized floors, ceilings, doors,
@@ -51,7 +51,7 @@ import static m.fixed_t.MAPFRACUNIT;
  * reuse the fixed 30s reopen, S1-stairs do not flip direction on reuse. Vanilla
  * specials (< 0x2F80) are untouched by every code path here.
  *
- * ALSO here: BOOM FIXED EXTENDED TYPES (142-269), the jff 1/29/98 "fill out all
+ * ALSO here: BOOM FIXED EXTENDED TYPES (142-269) — the jff 1/29/98 "fill out all
  * varieties" table (W1/WR/S1/SR/G1 flavors of the vanilla actions, donuts, exits),
  * the killough silent teleporters (thing and line-to-line), the jff elevators
  * (227-238) and instant toggle plats (211/212). See the FIXED TYPES section below.
@@ -94,7 +94,7 @@ public interface ActionsBoom extends ActionsFloors, ActionsMoveEvents, ActionsUs
 
     /**
      * CROSS (walkover) lane for generalized specials. Returns true when the special was
-     * generalized (handled or safely consumed): the vanilla switch must then be skipped.
+     * generalized (handled or safely consumed) — the vanilla switch must then be skipped.
      */
     default boolean crossBoomGeneralized(line_t line, mobj_t thing) {
         final int sp = line.special & 0xFFFF;
@@ -114,7 +114,7 @@ public interface ActionsBoom extends ActionsFloors, ActionsMoveEvents, ActionsUs
         return true;
     }
 
-    /** USE lane: switches (S1/SR) and manual push (D1/DR, backside sector, no tag). */
+    /** USE lane: switches (S1/SR) and manual push (D1/DR — backside sector, no tag). */
     default boolean useBoomGeneralized(mobj_t thing, line_t line) {
         final int sp = line.special & 0xFFFF;
         if (!isGeneralized(sp)) {
@@ -175,7 +175,7 @@ public interface ActionsBoom extends ActionsFloors, ActionsMoveEvents, ActionsUs
         return (sp & 0x0020) != 0; // lifts, stairs, crushers
     }
 
-    /** Route to the kind's EV: all seven ported. */
+    /** Route to the kind's EV — all seven ported. */
     private boolean dispatchBoomGeneralized(line_t line, int sp, mobj_t thing) {
         if (sp >= GenFloorBase) {
             return EV_DoGenFloor(line);
@@ -203,7 +203,7 @@ public interface ActionsBoom extends ActionsFloors, ActionsMoveEvents, ActionsUs
     /**
      * Boom p_genlin.c EV_DoGenFloor, faithful: parameterized floor movers, including
      * texture/type change under trigger or numeric model. The mover itself is the
-     * vanilla T_MoveFloor thinker: the renderer already animates any moving sector.
+     * vanilla T_MoveFloor thinker — the renderer already animates any moving sector.
      */
     default boolean EV_DoGenFloor(line_t line) {
         final int value = (line.special & 0xFFFF) - GenFloorBase;
@@ -869,7 +869,7 @@ public interface ActionsBoom extends ActionsFloors, ActionsMoveEvents, ActionsUs
 
     /** Boom EV_DoGenCrusher, mapped onto the vanilla crusher types. v1 note: after a
      * full stroke the vanilla ticker resets speed to CEILSPEED (Boom keeps the chosen
-     * speed): visible only on fast/turbo crushers. */
+     * speed) — visible only on fast/turbo crushers. */
     default boolean EV_DoGenCrusher(line_t line) {
         final int value = (line.special & 0xFFFF) - GenCrusherBase;
         final boolean silent = (value & CrusherSilent) != 0;
@@ -981,12 +981,12 @@ public interface ActionsBoom extends ActionsFloors, ActionsMoveEvents, ActionsUs
     }
 
     // ============================================================ BOOM SCROLLERS
-    // p_spec.c T_Scroll and P_SpawnScrollers: scrolling walls and flats, and the carrying
-    // conveyors that drive scripted sequences. Without the carrying conveyors, maps that
-    // move player objects across trigger lines to sequence events never run those scripts.
+    // p_spec.c T_Scroll / P_SpawnScrollers: walls, flats and the CARRY conveyors that
+    // drive voodoo-doll script closets (without carry the dolls never cross their
+    // trigger lines and map scripting silently never runs).
 
     int SCROLL_SHIFT = 5;
-    int CARRYFACTOR = 6144; // FRACUNIT * 0.09375: with DOOM friction, steady drift = line speed
+    int CARRYFACTOR = 6144; // FRACUNIT * 0.09375 — with DOOM friction, steady drift = line speed
 
     /** The per-tic scroller (ActiveStates.T_BoomScroll). */
     default void T_BoomScroll(doom.thinker_t th) {
@@ -1024,7 +1024,7 @@ public interface ActionsBoom extends ActionsFloors, ActionsMoveEvents, ActionsUs
                 }
             }
             default -> {
-                // SC_FLOOR / SC_CEILING move only the flat's texture: a visual the MC
+                // SC_FLOOR / SC_CEILING move only the flat's texture — a visual the MC
                 // renderer will pick up in a later slice; the thinker still runs so
                 // control/accel state stays Boom-exact.
             }
@@ -1124,7 +1124,7 @@ public interface ActionsBoom extends ActionsFloors, ActionsMoveEvents, ActionsUs
     // switches silently skip unmatched specials), they only seed state here.
     //
     // The values only ACT while the tagged sector's special carries the matching
-    // generalized bit (FRICTION_MASK 0x100 / PUSH_MASK 0x200): Boom's on/off switch.
+    // generalized bit (FRICTION_MASK 0x100 / PUSH_MASK 0x200) — Boom's on/off switch.
     //
     // v1 simplifications, documented per site: friction lives on sector_t (killough's
     // MBF form of the same behavior) and reads the mobj's CENTER sector (no
@@ -1138,7 +1138,7 @@ public interface ActionsBoom extends ActionsFloors, ActionsMoveEvents, ActionsUs
     int PUSH_FACTOR = 7;
 
     /** Recorded 5001/5002 (MT_PUSH/MT_PULL) map things: {x, y, doomednum} in integer
-     * map units: captured by SpawnMapThing at load, consumed by spawnBoomPushers. */
+     * map units — captured by SpawnMapThing at load, consumed by spawnBoomPushers. */
     ContextKey<BoomPushPoints> KEY_BOOM_PUSH_POINTS =
         ACTION_KEY_CHAIN.newKey(ActionsBoom.class, BoomPushPoints::new);
 
@@ -1159,7 +1159,7 @@ public interface ActionsBoom extends ActionsFloors, ActionsMoveEvents, ActionsUs
      * mobj fields every tic; the values themselves never change after spawn, so they
      * live on sector_t (additive fields) and the friction application site reads them
      * directly. Boom's mud-over-ice precedence (T_Friction only lowered the value)
-     * becomes a min() here: same per-tic outcome.
+     * becomes a min() here — same per-tic outcome.
      */
     default void spawnBoomFriction() {
         final line_t[] lines = levelLoader().lines;
@@ -1189,7 +1189,7 @@ public interface ActionsBoom extends ActionsFloors, ActionsMoveEvents, ActionsUs
 
     /**
      * P_SpawnPushers: 224 wind / 225 current push tagged sectors along the line
-     * vector; 226 needs a point source: Boom looks for an MT_PUSH/MT_PULL thing in
+     * vector; 226 needs a point source — Boom looks for an MT_PUSH/MT_PULL thing in
      * the tagged sector, we look through the positions SpawnMapThing recorded for
      * doomednums 5001/5002 (no recorded point in the sector = no effect, like Boom).
      */
@@ -1265,7 +1265,7 @@ public interface ActionsBoom extends ActionsFloors, ActionsMoveEvents, ActionsUs
     }
 
     /**
-     * T_Pusher (ActiveStates.T_BoomPusher), the per-tic force. Players only:
+     * T_Pusher (ActiveStates.T_BoomPusher), the per-tic force. Players only —
      * Boom 2.02 explicitly deferred "Things other than players" to a Phase II that
      * never shipped in 2.02.
      */
@@ -1307,7 +1307,7 @@ public interface ActionsBoom extends ActionsFloors, ActionsMoveEvents, ActionsUs
         }
 
         // Constant pushers (wind/current). v1: center-in-sector things (thinglist, like
-        // the carry scrollers) and no heightsec water cases: grounded vs airborne only.
+        // the carry scrollers) and no heightsec water cases — grounded vs airborne only.
         for (mobj_t thing = sec.thinglist; thing != null; thing = (mobj_t) thing.snext) {
             if (thing.player == null
                 || (thing.flags & (mobj_t.MF_NOGRAVITY | mobj_t.MF_NOCLIP)) != 0) {
@@ -1344,7 +1344,7 @@ public interface ActionsBoom extends ActionsFloors, ActionsMoveEvents, ActionsUs
     // enter these lanes; the generalized range (>= 0x2F80) is handled above.
     //
     // 214-218/245-255 are the passive scroller families spawned at level load by
-    // spawnBoomScrollers: they are consumed silently here, never dispatched.
+    // spawnBoomScrollers — they are consumed silently here, never dispatched.
     // Types owned by other slices (213/261 light transfers, 223-226 friction and
     // pushers, 242 deep water, 260 translucency, MBF 271/272 sky transfers) are
     // consumed safely with a one-time log so no Boom map can crash the vanilla path.
@@ -1389,7 +1389,7 @@ public interface ActionsBoom extends ActionsFloors, ActionsMoveEvents, ActionsUs
     /**
      * Boom P_CheckTag, filtered to the fixed extended range: a zero-tag line may
      * only fire the types that need no tag (lights, thing teleports, exits).
-     * Note 268/269 are absent from Boom's exemption list: quirk preserved.
+     * Note 268/269 are absent from Boom's exemption list — quirk preserved.
      */
     private boolean boomFixedTagOk(line_t line, int sp) {
         if (line.tag != 0) {
@@ -1407,7 +1407,7 @@ public interface ActionsBoom extends ActionsFloors, ActionsMoveEvents, ActionsUs
 
     /**
      * CROSS (walkover) lane for the fixed extended types. Returns true when the
-     * special was recognized (fired or safely consumed): the vanilla switch is
+     * special was recognized (fired or safely consumed) — the vanilla switch is
      * then skipped. Trigger table per Boom p_spec.c P_CrossSpecialLine.
      */
     default boolean crossBoomFixed(line_t line, int side, mobj_t thing) {
@@ -1869,7 +1869,7 @@ public interface ActionsBoom extends ActionsFloors, ActionsMoveEvents, ActionsUs
      * Boom EV_DoChange (jff 3/15/98): change a tagged sector's floor texture and
      * special in place, no motion. Trigger model copies from the line's front
      * sector; numeric model from an adjacent sector at the same floor height.
-     * (Boom also copies oldspecial: vanilla Mocha has no such field.)
+     * (Boom also copies oldspecial — vanilla Mocha has no such field.)
      */
     default boolean EV_DoChange(line_t line, int changetype) {
         boolean rtn = false;
@@ -1945,7 +1945,7 @@ public interface ActionsBoom extends ActionsFloors, ActionsMoveEvents, ActionsUs
 
     /**
      * The per-tic elevator mover (ActiveStates.T_MoveElevator). Going down the
-     * ceiling leads, going up the floor leads (jff 4/7/98: Boom's comments are
+     * ceiling leads, going up the floor leads (jff 4/7/98 — Boom's comments are
      * famously swapped here; this is what the code does), so the gap never
      * squeezes its riders. Completion checks the LEADING plane's result only,
      * exactly like Boom.
@@ -1984,7 +1984,7 @@ public interface ActionsBoom extends ActionsFloors, ActionsMoveEvents, ActionsUs
 
     // ------------------------------------------------------------ SILENT TELEPORTS
     // Boom p_telept.c (killough 1/31/98 + jff 4/14/98): teleports with no fog, no
-    // sound, no freeze, preserving orientation and momentum: the rooms-over-rooms
+    // sound, no freeze, preserving orientation and momentum — the rooms-over-rooms
     // workhorse. Types 207-210 (thing exits) and 243/244/262-267 (line-to-line).
 
     /** Maximum fixed_t units a line teleport exit may fudge to stay on the right side. */

@@ -101,7 +101,7 @@ public interface ActionsSpawns extends ActionsSectors {
         }
 
         // inherit attributes from deceased one
-        // Latte Doom patch: DEH: respawn by true type index (extended things)
+        // Latte Doom additive patch — DEH: respawn by true type index (extended things)
         mo = SpawnMobjNum(x, y, z, mobj.mobj_typenum >= 0 ? mobj.mobj_typenum : mobj.type.ordinal());
         mo.spawnpoint = mobj.spawnpoint;
         mo.angle = ANG45 * (mthing.angle / 45);
@@ -129,13 +129,13 @@ public interface ActionsSpawns extends ActionsSectors {
     @SourceCode.Exact
     @P_Mobj.C(P_SpawnMobj)
     default mobj_t SpawnMobj(@fixed_t int x, @fixed_t int y, @fixed_t int z, mobjtype_t type) {
-        // Latte Doom patch: DEH: delegate to the int-indexed spawn so MBF-class
+        // Latte Doom additive patch — DEH: delegate to the int-indexed spawn so MBF-class
         // DEHACKED things (mobjinfo 137+) can spawn too. Identical for vanilla types.
         return SpawnMobjNum(x, y, z, type.ordinal());
     }
 
     /**
-     * Latte Doom patch: DEH: P_SpawnMobj by mobjinfo index. Types past the
+     * Latte Doom additive patch — DEH: P_SpawnMobj by mobjinfo index. Types past the
      * mobjtype_t enum keep the NUMMOBJTYPES marker in mobj.type (matches no vanilla
      * type check) while mobj_typenum carries the true index.
      */
@@ -171,12 +171,12 @@ public interface ActionsSpawns extends ActionsSectors {
         }
         // do not set the state with P_SetMobjState,
         // because action routines can not be called yet
-        st = states[info.spawnStateNum()]; // Latte Doom patch: DEH int state
+        st = states[info.spawnStateNum()]; // Latte Doom additive patch — DEH int state
 
         mobj.mobj_state = st;
         mobj.mobj_tics = st.tics;
         mobj.mobj_sprite = st.sprite;
-        mobj.mobj_spritenum = st.dehSpriteNum(); // Latte Doom patch: DEH
+        mobj.mobj_spritenum = st.dehSpriteNum(); // Latte Doom additive patch — DEH
         mobj.mobj_frame = st.frame;
 
         // set subsector and/or block links
@@ -346,7 +346,7 @@ public interface ActionsSpawns extends ActionsSectors {
         }
 
         // find which type to spawn
-        // Latte Doom patch: DEH: search the whole (possibly extended) table so
+        // Latte Doom additive patch — DEH: search the whole (possibly extended) table so
         // MBF doomednums (dogs 888, sceptre 2016, bible 2017, DEH-assigned ids) spawn.
         for (i = 0; i < mobjinfo.length; i++) {
             if (mthing.type == mobjinfo[i].doomednum) {
@@ -358,7 +358,7 @@ public interface ActionsSpawns extends ActionsSectors {
         // Do not abort because of an unknown thing. Ignore it, but post a
         // warning message for the player.
         if (i == mobjinfo.length) { // DEH may have extended the table past NUMMOBJTYPES
-            // Latte Doom patch: Boom point pushers: mocha has no MT_PUSH (5001)
+            // Latte Doom additive patch — Boom point pushers: mocha has no MT_PUSH (5001)
             // / MT_PULL (5002) mobj types, so record the map thing's position instead;
             // spawnBoomPushers aims the 226 point sources at these.
             if (mthing.type == 5001 || mthing.type == 5002) {
@@ -391,7 +391,7 @@ public interface ActionsSpawns extends ActionsSectors {
             z = ONFLOORZ;
         }
 
-        mobj = this.SpawnMobjNum(x, y, z, i); // Latte Doom patch: DEH int spawn
+        mobj = this.SpawnMobjNum(x, y, z, i); // Latte Doom additive patch — DEH int spawn
         mobj.spawnpoint.copyFrom(mthing);
 
         if (mobj.mobj_tics > 0) {

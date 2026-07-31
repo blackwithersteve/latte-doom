@@ -57,17 +57,17 @@ public interface ActionsUseEvents extends ActionTrait {
      */
     boolean useBoomGeneralized(mobj_t thing, line_t line);
 
-    // Latte Doom patch: Boom fixed extended types (142-269), same
+    // Latte Doom additive patch: Boom fixed extended types (142-269), same
     // hook pattern as the generalized lane; implemented in ActionsBoom.
     boolean useBoomFixed(mobj_t thing, line_t line, boolean side);
 
     default boolean UseSpecialLine(mobj_t thing, line_t line, boolean side) {
-        // Latte Doom patch: Boom generalized specials take this lane.
+        // Latte Doom additive patch: Boom generalized specials take this lane.
         if (useBoomGeneralized(thing, line)) {
             return true;
         }
 
-        // Latte Doom patch: Boom fixed extended types (142-269) take
+        // Latte Doom additive patch: Boom fixed extended types (142-269) take
         // this lane; vanilla specials (< 142) never enter it.
         if (useBoomFixed(thing, line, side)) {
             return true;
@@ -540,7 +540,7 @@ public interface ActionsUseEvents extends ActionTrait {
         UseSpecialLine(sp.usething, line, side);
 
         // can't use for than one special line in a row
-        // Latte Doom patch: ...unless Boom's ML_PASSUSE (0x200) says pass through
+        // Latte Doom additive patch: ...unless Boom's ML_PASSUSE (0x200) says pass through
         return (line.flags & 0x200) != 0;
     }
 ;

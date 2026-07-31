@@ -98,7 +98,7 @@ public interface Zombies extends ActionTrait {
         }
 
         if (actor.target == null || actor.target.health <= 0 || !getEnemies().CheckSight(actor, actor.target)) {
-            actor.SetMobjStateNum(actor.info.seeStateNum()); // Latte Doom patch: DEH int state
+            actor.SetMobjStateNum(actor.info.seeStateNum()); // Latte Doom additive patch — DEH int state
         }
     }
 

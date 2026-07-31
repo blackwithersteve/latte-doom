@@ -107,7 +107,7 @@ public interface ActionsEnemies extends ActionsSight, ActionsSpawns {
 
         // [SYNC}: Major desync cause of desyncs.
         // DO NOT compare with null!
-        if (!actor.info.hasMeleeState()) { // Latte Doom patch: DEH int state
+        if (!actor.info.hasMeleeState()) { // Latte Doom additive patch — DEH int state
             dist -= 128 * FRACUNIT; // no melee attack, so fire more
         }
 

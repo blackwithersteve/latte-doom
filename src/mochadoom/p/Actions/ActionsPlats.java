@@ -75,7 +75,7 @@ public interface ActionsPlats extends ActionsMoveEvents, ActionsUseEvents {
                 ActivateInStasis(line.tag);
                 break;
 
-            // Latte Doom patch: Boom toggle plats (211/212) reactivate
+            // Latte Doom additive patch — Boom toggle plats (211/212) reactivate
             // their stasis instances and report success even when all instances
             // are mid-toggle (jff 3/14/98)
             case toggleUpDn:
@@ -178,7 +178,7 @@ public interface ActionsPlats extends ActionsMoveEvents, ActionsUseEvents {
                     StartSound(sec.soundorg, sounds.sfxenum_t.sfx_pstart);
                     break;
 
-                // Latte Doom patch: Boom instant toggle plat (211/212,
+                // Latte Doom additive patch — Boom instant toggle plat (211/212,
                 // jff 3/14/98): the floor snaps between its own floor and ceiling
                 // heights, crushing, silent (no start sound, no waiting). low/high
                 // are deliberately inverted; MovePlane's pastdest shortcut makes
@@ -204,7 +204,7 @@ public interface ActionsPlats extends ActionsMoveEvents, ActionsUseEvents {
 
         for (final plat_t activeplat : plats.activeplats) {
             if (activeplat != null && activeplat.tag == tag && activeplat.status == plat_e.in_stasis) {
-                // Latte Doom patch: Boom toggle plats (211/212) flip
+                // Latte Doom additive patch — Boom toggle plats (211/212) flip
                 // direction on every reactivation (jff 3/14/98)
                 if (activeplat.type == plattype_e.toggleUpDn) {
                     activeplat.status = activeplat.oldstatus == plat_e.up ? plat_e.down : plat_e.up;

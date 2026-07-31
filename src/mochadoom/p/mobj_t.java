@@ -130,13 +130,13 @@ public class mobj_t extends thinker_t implements ISoundOrigin, Interceptable,
 	/** used to find patch_t and flip value */
 	public spritenum_t mobj_sprite;
 	/**
-	 * Latte Doom patch: DEH: true sprite index; mirrors mobj_sprite but can
+	 * Latte Doom additive patch — DEH: true sprite index; mirrors mobj_sprite but can
 	 * exceed spritenum_t for MBF sprites (138+). -1 = unset, use the enum. Renderers and
 	 * the snapshot capture prefer this (marked sites).
 	 */
 	public int mobj_spritenum = -1;
 	/**
-	 * Latte Doom patch: DEH: true mobj type index; mirrors {@link #type} but can
+	 * Latte Doom additive patch — DEH: true mobj type index; mirrors {@link #type} but can
 	 * exceed mobjtype_t for MBF things (137+). Set by SpawnMobjNum for every spawn.
 	 */
 	public int mobj_typenum = -1;
@@ -305,7 +305,7 @@ public class mobj_t extends thinker_t implements ISoundOrigin, Interceptable,
 	/**
 	 * P_SetMobjState Returns true if the mobj is still present.
 	 *
-	 * Latte Doom patch: DEH: the walk is int-indexed now (SetMobjStateNum) so
+	 * Latte Doom additive patch — DEH: the walk is int-indexed now (SetMobjStateNum) so
 	 * MBF-class DEHACKED states past the statenum_t enum (967+) work; this enum entry
 	 * point delegates and is behaviorally identical for vanilla states.
 	 */
@@ -314,7 +314,7 @@ public class mobj_t extends thinker_t implements ISoundOrigin, Interceptable,
 		return SetMobjStateNum(state == null ? 0 : state.ordinal());
 	}
 
-	/** Latte Doom patch: DEH: P_SetMobjState by state index. */
+	/** Latte Doom additive patch — DEH: P_SetMobjState by state index. */
 	public boolean SetMobjStateNum(int statenum) {
 		state_t st;
 

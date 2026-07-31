@@ -278,16 +278,16 @@ public class player_t /*extends mobj_t */ implements Cloneable, IReadableDoomObj
 
     protected final static int PLAYERTHRUST = 2048 / TIC_MUL;
 
-    /** Boom p_spec.h MORE_FRICTION_MOMENTUM (Latte Doom patch:). */
+    /** Boom p_spec.h MORE_FRICTION_MOMENTUM (Latte Doom additive patch). */
     private final static int MORE_FRICTION_MOMENTUM = 15000;
 
     /**
-     * Latte Doom patch: Boom v2.02 P_GetMoveFactor, the thrust scale on friction floors.
-     * A low-friction floor gives a small movefactor and long skids; a high-friction floor
-     * slows movement, easing as momentum builds. Vanilla floors return exactly PLAYERTHRUST
-     * (2048 = ORIG_FRICTION_FACTOR), byte for byte. The gate conditions mirror T_Friction's
-     * per-tic assignment: the caller is player code, the object is on this sector's floor,
-     * and neither NOGRAVITY nor NOCLIP is set.
+     * Latte Doom additive patch — Boom v2.02 P_GetMoveFactor: the thrust scale on
+     * friction floors. Ice gives poor footing (small movefactor, long skids); mud makes
+     * you crawl, easing as momentum builds (phares' "better footing" shifts). Vanilla
+     * floors return exactly PLAYERTHRUST (2048 = ORIG_FRICTION_FACTOR), byte-identical.
+     * The gate conditions mirror T_Friction's per-tic assignment (player handled by the
+     * caller being player code, on THIS sector's floor, not NOGRAVITY/NOCLIP).
      */
     private int boomMoveFactor() {
         final sector_t sec = mo.subsector != null ? mo.subsector.sector : null;
@@ -325,7 +325,7 @@ public class player_t /*extends mobj_t */ implements Cloneable, IReadableDoomObj
         onground = (mo.z <= mo.floorz);
 
         if (cmd.forwardmove != 0 && onground) {
-            // Latte Doom patch: Boom movefactor replaces the 2048 constant
+            // Latte Doom additive patch: Boom movefactor replaces the 2048 constant
             Thrust(mo.angle, cmd.forwardmove * boomMoveFactor());
         }
 
@@ -686,9 +686,9 @@ public class player_t /*extends mobj_t */ implements Cloneable, IReadableDoomObj
         }
 
         // Has hitten ground.
-        // Latte Doom patch: BOOM generalized sector specials (bits 5+):
+        // Latte Doom additive patch — BOOM generalized sector specials (bits 5+):
         // damage bits 5-6 (none/5/10/20 per 32 tics), secret bit 7; friction/push bits
-        // are thinker-side. The low 5 bits are lighting only: no player effect. Without
+        // are thinker-side. The low 5 bits are lighting only — no player effect. Without
         // this, ANY Boom sector special hit the vanilla switch's fatal default.
         if ((sector.special & 0xFFE0) != 0) {
             switch ((sector.special >> 5) & 3) {
@@ -768,8 +768,8 @@ public class player_t /*extends mobj_t */ implements Cloneable, IReadableDoomObj
                 break;
 
             default:
-                // Latte Doom patch: unknown specials must not KILL the engine
-                // (vanilla's fatal here is why "Boom maps crash"): log and carry on.
+                // Latte Doom additive patch: unknown specials must not KILL the engine
+                // (vanilla's fatal here is why "Boom maps crash") — log and carry on.
                 System.err.println("P_PlayerInSpecialSector: unknown special " + sector.special);
                 sector.special = 0;
                 break;
@@ -1111,6 +1111,17 @@ public class player_t /*extends mobj_t */ implements Cloneable, IReadableDoomObj
             pendingweapon = readyweapon;
         }
 
+        // Latte Doom additive patch: a state chain that runs A_Lower while a weapon is
+        // being brought up leaves readyweapon at wp_nochange, and indexing weaponinfo
+        // with it is out of bounds. The original engine reads past the array and carries
+        // on; Java throws and takes the engine thread with it. Survive with the fist and
+        // say so, so a broken patch degrades instead of ending the game.
+        if (pendingweapon.ordinal() >= weaponinfo.length) {
+            System.err.println("BringUpWeapon: no pending weapon (a DEHACKED state chain"
+                + " lowered during a raise) -- falling back to the fist");
+            pendingweapon = weapontype_t.wp_fist;
+        }
+
         if (pendingweapon == weapontype_t.wp_chainsaw) {
             S_StartSound: {
                 DOOM.doomSound.StartSound(mo, sfxenum_t.sfx_sawup);
@@ -1407,7 +1418,7 @@ public class player_t /*extends mobj_t */ implements Cloneable, IReadableDoomObj
 
         usedown = attackdown = true;  // don't do anything immediately
         playerstate = PST_LIVE;
-        // Latte Doom patch: DEH Misc: Initial Health / Initial Bullets
+        // Latte Doom additive patch — DEH Misc: Initial Health / Initial Bullets
         // (defaults 100/50, identical to vanilla when no patch is loaded).
         health[0] = deh.DehMisc.initialHealth;
         readyweapon = pendingweapon = weapontype_t.wp_pistol;

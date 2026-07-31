@@ -530,7 +530,7 @@ public interface ActionsMovement extends ActionsPathTraverse {
                 mo.flags &= ~MF_SKULLFLY;
                 mo.momx = mo.momy = mo.momz = 0;
 
-                mo.SetMobjStateNum(mo.info.spawnStateNum()); // Latte Doom patch: DEH int state
+                mo.SetMobjStateNum(mo.info.spawnStateNum()); // Latte Doom additive patch — DEH int state
             }
             return;
         }
@@ -623,7 +623,7 @@ public interface ActionsMovement extends ActionsPathTraverse {
             mo.momx = 0;
             mo.momy = 0;
         } else {
-            // Latte Doom patch: Boom v2.02 sector friction (linedef 223):
+            // Latte Doom additive patch — Boom v2.02 sector friction (linedef 223):
             // a PLAYER standing on this sector's own floor uses the sector's value
             // while the special carries FRICTION_MASK; everything else (monsters,
             // ledge-standers inside the sector, vanilla floors) keeps FRICTION.

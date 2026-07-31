@@ -203,7 +203,7 @@ public class DoomMain<T, V> extends DoomStatus<T, V> implements IDoomGameNetwork
      * @throws IOException 
      */
     public void Display() throws IOException {
-        // Latte Doom patch: the Minecraft world is the renderer, skip the
+        // Latte Doom additive patch: the Minecraft world is the renderer — skip the
         // whole software draw (view, HUD, menu, wipes) unless the debug screen wants
         // the framebuffer. The page-flip callback still fires so the host's frame
         // duties (volumes, freeze, terminate) keep their cadence.
@@ -1713,7 +1713,7 @@ public class DoomMain<T, V> extends DoomStatus<T, V> implements IDoomGameNetwork
     } 
 
     /** DOOM Par Times [4][10] */
-    // Latte Doom patch: DEH [PARS]: public so deh.DehLoader can patch par times.
+    // Latte Doom additive patch — DEH [PARS]: public so deh.DehLoader can patch par times.
     public final int[][] pars = { 
         {0}, 
         {0,30,75,120,90,165,180,180,30,165}, 
@@ -1722,7 +1722,7 @@ public class DoomMain<T, V> extends DoomStatus<T, V> implements IDoomGameNetwork
     }; 
 
     /** DOOM II Par Times */
-    // Latte Doom patch: DEH [PARS]: public so deh.DehLoader can patch par times.
+    // Latte Doom additive patch — DEH [PARS]: public so deh.DehLoader can patch par times.
     public final int[] cpars = {
         30,90,120,120,90,150,120,120,270,90,    //  1-10
         210,150,150,150,210,150,420,150,210,150,    // 11-20
@@ -2116,7 +2116,7 @@ public class DoomMain<T, V> extends DoomStatus<T, V> implements IDoomGameNetwork
 
     /** True if the ExMy map lump is present in the loaded WAD set (IWAD + PWADs). Latte
      * Doom uses this to permit episodes past the IWAD's own count only when a PWAD really
-     * provides that map: e.g. SIGIL's E5Mx layered on Ultimate Doom. */
+     * provides that map — e.g. SIGIL's E5Mx layered on Ultimate Doom. */
     private boolean mapLumpExists(int episode, int map) {
         return wadLoader.CheckNumForName(String.format("E%dM%d", episode, map)) >= 0;
     }
@@ -2153,10 +2153,10 @@ public class DoomMain<T, V> extends DoomStatus<T, V> implements IDoomGameNetwork
             episode = 1;
         }
 
-        // Latte Doom patch: accept episodes past the IWAD's own count when a loaded PWAD
-        // provides that map lump, which is how a fifth-episode PWAD loads on a Boom-compatible
-        // port. The clamp is relaxed only when the ExMy lump exists, so a warp into a missing
-        // map is still rejected.
+        // Latte Doom: honour episodes BEYOND the IWAD's own count when a loaded PWAD
+        // actually provides that map lump — this is how SIGIL (E5Mx, John Romero's free
+        // 5th episode) loads on a Boom-compatible port. Only relax the clamp when ExMy
+        // really exists, so you still can't warp into a missing map.
         if (isRetail()) {
             if (episode > 4 && !mapLumpExists(episode, map)) {
                 episode = 4;
@@ -2198,13 +2198,14 @@ public class DoomMain<T, V> extends DoomStatus<T, V> implements IDoomGameNetwork
         
         respawnmonsters = skill == skill_t.sk_nightmare || respawnparm;
 
+
         // If on nightmare/fast monsters make everything MOAR pimp.
-        // Latte Doom patch: base the fast-monster switch on whether the tables hold their
-        // fast values, not on this instance's previous skill. The tables are static and
-        // outlive an engine restart within the same JVM, which this port performs on every
+        // Latte Doom patch: base the fast-monster switch on whether the tables are actually
+        // in their fast state, not on this instance's previous skill. The tables are static
+        // and outlive an engine restart within the same JVM, which this port does on every
         // warp, so a fresh engine always reports a non-nightmare gameskill and the restore
-        // below would never run, leaving every later game with halved demon tics and
-        // 20-unit fireballs for the life of the process.
+        // below never ran. One nightmare game left every later game with halved demon tics
+        // and 20-unit fireballs until the process exited.
         final boolean wantFast = fastparm || skill == skill_t.sk_nightmare;
         if (wantFast && !TABLES_ARE_FAST) {
             TABLES_ARE_FAST = true;
@@ -2625,12 +2626,30 @@ public class DoomMain<T, V> extends DoomStatus<T, V> implements IDoomGameNetwork
             e1.printStackTrace();
         }
 
-        // Latte Doom patch: DEH: apply every DEHACKED/BEX lump in the loaded
-        // wad set now: after W_Init so the lumps exist, before R_Init/P_Init/HU/ST so
+        // Latte Doom additive patch — DEH: apply every DEHACKED/BEX lump in the loaded
+        // wad set now — after W_Init so the lumps exist, before R_Init/P_Init/HU/ST so
         // every table consumer (sprites, states, strings, pars) sees the patched world.
-        // A broken patch must not stop the boot; in the worst case the tables stay vanilla.
+        // A broken patch must never kill the boot: worst case we continue vanilla.
         try {
+            // Latte Doom patch: the tables are JVM statics — put back the untouched
+            // originals before this boot's own patches apply, or the previous WAD set's
+            // patches remain welded into every later game.
+            deh.DehState.restoreVanilla();
             deh.DehLoader.applyWadDehLumps(this);
+            // Latte Doom patch: standalone .deh/.bex files follow the embedded lumps, in
+            // the order the host listed them, so a file can refine what a WAD began.
+            for (final String dehFile : mochadoom.Engine.DEH_FILES) {
+                try {
+                    final String text = new String(
+                        java.nio.file.Files.readAllBytes(java.nio.file.Path.of(dehFile)),
+                        java.nio.charset.StandardCharsets.ISO_8859_1);
+                    System.out.println("[lattedoom-deh] patch file " + dehFile + " -- applying");
+                    deh.DehLoader.applyText(text, this);
+                } catch (Exception e) {
+                    System.err.println("[lattedoom-deh] patch file failed to apply"
+                        + " (continuing): " + dehFile + ": " + e);
+                }
+            }
             // Latte Doom patch: the patch loader writes absolute values into states[].tics
             // and mobjinfo[].speed, which undoes any fast-monster mutation still recorded in
             // TABLES_ARE_FAST. The flag describes those tables, so it has to follow them.
@@ -3828,7 +3847,7 @@ public class DoomMain<T, V> extends DoomStatus<T, V> implements IDoomGameNetwork
                 Ticker();
                 gametic++;
 
-                // Latte Doom patch: publish world state after each tic
+                // Latte Doom additive patch: publish world state after EVERY tic
                 if (Engine.TIC_TAP != null) {
                     Engine.TIC_TAP.run();
                 }

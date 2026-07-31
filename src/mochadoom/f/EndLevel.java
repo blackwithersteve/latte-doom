@@ -1728,10 +1728,10 @@ public void WI_unloadData()
     protected void initVariables(wbstartstruct_t wbstartstruct) {
         wbs = wbstartstruct.clone();
 
-        // Latte Doom patch: the intermission's backgrounds, level-name patches and location
-        // markers are all sized for the IWAD's own episode count (NUMEPISODES). A PWAD fifth
-        // episode has no WIMAP4, WILV4x or lnodes[4], so the between-levels screen is drawn
-        // as the last real episode's. This is cosmetic; the map itself has already loaded.
+        // Latte Doom: the intermission's backgrounds, level-name patches and "you are here"
+        // nodes are all sized for the IWAD's own episode count (NUMEPISODES). A PWAD 5th
+        // episode (SIGIL's E5) has no WIMAP4/WILV4x/lnodes[4], so draw the between-levels
+        // screen as the last real episode's — cosmetic only; the actual map already loaded.
         if (wbs.epsd >= data.Defines.NUMEPISODES) {
             wbs.epsd = data.Defines.NUMEPISODES - 1;
         }

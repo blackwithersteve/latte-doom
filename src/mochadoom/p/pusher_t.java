@@ -3,7 +3,7 @@ package p;
 import doom.thinker_t;
 
 /**
- * Latte Doom patch: Boom v2.02 pusher thinker state (p_spec.c pusher_t).
+ * Latte Doom additive patch — Boom v2.02 pusher thinker state (p_spec.c pusher_t).
  * One instance per pusher effect: wind (224) affects players above the floor at full
  * force and grounded players at half force; current (225) affects only grounded
  * players at full force; a point source (226) pushes or pulls players within
@@ -20,7 +20,7 @@ public class pusher_t extends thinker_t {
     public int type;
     /** Force components, INTEGER map units (line delta >> FRACBITS), Boom x_mag/y_mag. */
     public int xMag, yMag;
-    /** P_AproxDistance(xMag, yMag): integer map units; scales the point falloff. */
+    /** P_AproxDistance(xMag, yMag) — integer map units; scales the point falloff. */
     public int magnitude;
     /** Effective radius of a point source, fixed_t (magnitude << (FRACBITS+1)). */
     public int radius;

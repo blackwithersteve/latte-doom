@@ -79,7 +79,7 @@ public interface ActionsCeilings extends ActionsMoveEvents, ActionsUseEvents {
 
                 if (res == result_e.pastdest) {
                     switch (ceiling.type) {
-                        // Latte Doom patch: Boom generalized ceilings land
+                        // Latte Doom additive patch — Boom generalized ceilings land
                         case genCeilingChg0:
                         case genCeilingChgT:
                         case genCeilingChg:
@@ -119,7 +119,7 @@ public interface ActionsCeilings extends ActionsMoveEvents, ActionsUseEvents {
 
                 if (res == result_e.pastdest) {
                     switch (ceiling.type) {
-                        // Latte Doom patch: Boom generalized ceilings land (down)
+                        // Latte Doom additive patch — Boom generalized ceilings land (down)
                         case genCeilingChg0:
                         case genCeilingChgT:
                         case genCeilingChg:
@@ -143,7 +143,7 @@ public interface ActionsCeilings extends ActionsMoveEvents, ActionsUseEvents {
                             break;
                         case lowerAndCrush:
                         case lowerToFloor:
-                        // Latte Doom patch: Boom fixed ceiling lowers
+                        // Latte Doom additive patch — Boom fixed ceiling lowers
                         // (199-206) are done when they reach bottom (p_ceilng.c)
                         case lowerToLowest:
                         case lowerToMaxFloor:
@@ -234,7 +234,7 @@ public interface ActionsCeilings extends ActionsMoveEvents, ActionsUseEvents {
                     ceiling.speed = CEILSPEED;
                     break;
 
-                // Latte Doom patch: Boom fixed types 199-206 (p_ceilng.c)
+                // Latte Doom additive patch — Boom fixed types 199-206 (p_ceilng.c)
                 case lowerToLowest:
                     ceiling.bottomheight = sec.FindLowestCeilingSurrounding();
                     ceiling.direction = -1;

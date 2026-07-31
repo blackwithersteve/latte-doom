@@ -34,7 +34,7 @@ import static p.MobjFlags.*;
  */
 public class info {
 
-    // Latte Doom patch: DEH: no longer final so deh.DehState can reallocate the
+    // Latte Doom additive patch — DEH: no longer final so deh.DehState can reallocate the
     // table larger for MBF-class DEHACKED patches (states 967..1075+). Contents and vanilla
     // indices are untouched; every reader reads the field at use time.
     public static state_t[] states = {

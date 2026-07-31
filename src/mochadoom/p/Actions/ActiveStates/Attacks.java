@@ -265,8 +265,8 @@ public interface Attacks extends Monsters {
 
     default void A_Pain(mobj_t actor) {
         if (actor.info.painsound != null) {
-            // Latte Doom patch: only players in MARINE FORM use doomguy's
-            // voice: per player (players[1..3] are other Minecraft people).
+            // Latte Doom additive patch: only players in MARINE FORM use doomguy's
+            // voice — per player (players[1..3] are other Minecraft people).
             if (actor.player == null || mochadoom.Engine.VOICED_PLAYERS.contains(actor.player)) {
                 StartSound(actor, actor.info.painsound);
             }

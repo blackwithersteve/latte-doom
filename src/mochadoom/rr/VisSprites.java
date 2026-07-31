@@ -83,8 +83,8 @@ public final class VisSprites<V>
             rendererState.colormaps.spritelights = rendererState.colormaps.scalelight[lightnum];
 
         // Handle all things in sector.
-        // Latte Doom patch: hardening, walk defensively. A corrupted thinglist (a cyclic snext
-        // chain) would spin here forever and freeze the ENTIRE engine: the watchdog
+        // Latte Doom hardening: walk defensively. A corrupted thinglist (a cyclic snext
+        // chain) would spin here forever and freeze the ENTIRE engine — the watchdog
         // caught exactly this stall in AddSprites. Bounding the walk turns a bad list into
         // a dropped frame instead of a hung world. No legit sector holds this many things.
         int guard = 0;
@@ -142,7 +142,7 @@ public final class VisSprites<V>
             return;
 
         // decide which patch to use for sprite relative to player
-        // Latte Doom patch: DEH: use the true sprite index (MBF sprites 138+),
+        // Latte Doom additive patch — DEH: use the true sprite index (MBF sprites 138+),
         // and skip mobjs whose sprite has no lumps (e.g. TNT1 invisibles) instead of dying.
         final int dehsprnum = thing.mobj_spritenum >= 0 ? thing.mobj_spritenum : thing.mobj_sprite.ordinal();
         if (dehsprnum >= rendererState.DOOM.spriteManager.getNumSprites()) {
@@ -154,14 +154,14 @@ public final class VisSprites<V>
         }
         sprdef = rendererState.DOOM.spriteManager.getSprite(dehsprnum);
         if (sprdef == null || sprdef.numframes <= 0) {
-            return; // sprite has no lumps (DEH extension placeholder): draw nothing
+            return; // sprite has no lumps (DEH extension placeholder) — draw nothing
         }
         if (RANGECHECK) {
             if ((thing.mobj_frame & FF_FRAMEMASK) >= sprdef.numframes)
                 rendererState.DOOM.doomSystem.Error("R_ProjectSprite: invalid sprite frame %d : %d ",
                     thing.mobj_sprite, thing.mobj_frame);
         }
-        // Latte Doom patch: DEH: a patch can point states at frame letters the
+        // Latte Doom additive patch — DEH: a patch can point states at frame letters the
         // wad never supplied; skip the mobj instead of crashing the renderer.
         if ((thing.mobj_frame & FF_FRAMEMASK) >= sprdef.spriteframes.length
             || sprdef.spriteframes[thing.mobj_frame & FF_FRAMEMASK] == null) {

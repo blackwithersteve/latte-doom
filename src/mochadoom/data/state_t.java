@@ -52,19 +52,19 @@ public class state_t {
      */
     public int id;
 
-    // Latte Doom patch: DEH: int mirrors for MBF-class DEHACKED patches whose
+    // Latte Doom additive patch — DEH: int mirrors for MBF-class DEHACKED patches whose
     // state/sprite indices exceed the vanilla enums (statenum_t tops out at 967,
     // spritenum_t at 138). -1 = unset, follow the enum field. The mobj state walker and
     // the sprite projection sites prefer these via the accessors below.
     public int dehnext = -1;
     public int dehsprite = -1;
 
-    /** Latte Doom patch: DEH: the true next-state index. */
+    /** Latte Doom additive patch — DEH: the true next-state index. */
     public int dehNextState() {
         return dehnext >= 0 ? dehnext : nextstate.ordinal();
     }
 
-    /** Latte Doom patch: DEH: the true sprite index. */
+    /** Latte Doom additive patch — DEH: the true sprite index. */
     public int dehSpriteNum() {
         return dehsprite >= 0 ? dehsprite : sprite.ordinal();
     }

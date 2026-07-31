@@ -188,7 +188,7 @@ public interface HorrendousVisages extends Sounds {
 
         newmobj = getEnemies().SpawnMobj(targ.x, targ.y, targ.z, type);
         if (getEnemies().LookForPlayers(newmobj, true)) {
-            newmobj.SetMobjStateNum(newmobj.info.seeStateNum()); // Latte Doom patch: DEH int state
+            newmobj.SetMobjStateNum(newmobj.info.seeStateNum()); // Latte Doom additive patch — DEH int state
         }
 
         // telefrag anything in this spot

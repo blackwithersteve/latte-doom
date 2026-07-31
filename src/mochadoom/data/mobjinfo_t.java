@@ -64,7 +64,7 @@ public class mobjinfo_t {
         public long flags;
         public statenum_t raisestate;
 
-        // Latte Doom patch: DEH: int mirrors for MBF-class DEHACKED patches whose
+        // Latte Doom additive patch — DEH: int mirrors for MBF-class DEHACKED patches whose
         // state indices exceed statenum_t (>= 967). -1 = unset, follow the enum field.
         // The enum fields hold S_NULL in that case; state-machine consumer sites use the
         // *StateNum()/has*State() accessors instead (all marked at their sites).

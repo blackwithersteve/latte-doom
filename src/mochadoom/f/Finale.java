@@ -65,7 +65,7 @@ public class Finale<T> {
 	private static final int TEXTSPEED = 3;
 	private static final int TEXTWAIT = 250;
 
-	// Latte Doom patch: DEH [STRINGS]: public so deh.DehLoader can swap the
+	// Latte Doom additive patch — DEH [STRINGS]: public so deh.DehLoader can swap the
 	// finale texts in place (the englsh constants themselves are inlined by javac).
 	public final static String[] doom_text = { E1TEXT, E2TEXT, E3TEXT, E4TEXT };
 	public final static String[] doom2_text = { C1TEXT, C2TEXT, C3TEXT, C4TEXT, C5TEXT, C6TEXT };
@@ -570,7 +570,7 @@ public class Finale<T> {
 	public void CastDrawer() {
 		// erase the entire screen to a background
 		DOOM.graphicSystem.DrawPatchScaled(FG, DOOM.wadLoader.CachePatchName("BOSSBACK", PU_CACHE), DOOM.vs, 0, 0);
-		// Latte Doom patch: DEH [STRINGS]: cast-call names (CC_*) are consulted
+		// Latte Doom additive patch — DEH [STRINGS]: cast-call names (CC_*) are consulted
 		// lazily so patches applied after this Finale was constructed still take effect.
 		this.CastPrint(deh.DehStrings.castName(castnum, castorder[castnum].name));
 

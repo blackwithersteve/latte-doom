@@ -75,7 +75,7 @@ public interface ActionsThinkers extends ActionsSectors, ThinkerList {
     @P_Spec.C(P_SpawnSpecials)
     void spawnBoomScrollers();
 
-    /** Latte Doom patch: Boom friction (223) + pushers (224-226), spawned at
+    /** Latte Doom additive patch: Boom friction (223) + pushers (224-226), spawned at
      * the same P_SpawnSpecials point Boom uses (right after the scrollers). */
     void spawnBoomFrictionPushers();
 
@@ -214,9 +214,9 @@ public interface ActionsThinkers extends ActionsSectors, ThinkerList {
         
         getSwitches().initButtonList();
 
-        // Latte Doom patch: Boom scrollers (conveyors, wall/flat scroll)
+        // Latte Doom additive patch: Boom scrollers (conveyors, wall/flat scroll)
         spawnBoomScrollers();
-        // Latte Doom patch: Boom friction floors + wind/current/point pushers
+        // Latte Doom additive patch: Boom friction floors + wind/current/point pushers
         spawnBoomFrictionPushers();
 
         // UNUSED: no horizonal sliders.
@@ -264,7 +264,7 @@ public interface ActionsThinkers extends ActionsSectors, ThinkerList {
         StartSound(mo, sounds.sfxenum_t.sfx_itmbk);
 
         // find which type to spawn
-        // Latte Doom patch: DEH: search the whole (possibly extended) table,
+        // Latte Doom additive patch — DEH: search the whole (possibly extended) table,
         // and bail instead of indexing one past the end when nothing matches.
         for (i = 0; i < mobjinfo.length; i++) {
             if (mthing.type == mobjinfo[i].doomednum) {
@@ -283,7 +283,7 @@ public interface ActionsThinkers extends ActionsSectors, ThinkerList {
             z = ONFLOORZ;
         }
 
-        mo = SpawnMobjNum(x, y, z, i); // Latte Doom patch: DEH int spawn
+        mo = SpawnMobjNum(x, y, z, i); // Latte Doom additive patch — DEH int spawn
         mo.spawnpoint = mthing;
         mo.angle = ANG45 * (mthing.angle / 45);
 

@@ -13,13 +13,13 @@ public enum ceiling_e {
      fastCrushAndRaise,
      silentCrushAndRaise,
 
-     // Latte Doom patch: Boom generalized ceilings (p_genlin.c)
+     // Latte Doom additive patch — Boom generalized ceilings (p_genlin.c)
      genCeiling,
      genCeilingChg0,
      genCeilingChgT,
      genCeilingChg,
 
-     // Latte Doom patch: Boom fixed types 199-206 (jff 02/04/98):
+     // Latte Doom additive patch — Boom fixed types 199-206 (jff 02/04/98):
      // lower ceiling to lowest surrounding ceiling / to highest surrounding
      // floor. Appended so vanilla ordinals hold.
      lowerToLowest,

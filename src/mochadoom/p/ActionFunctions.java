@@ -41,7 +41,7 @@ import utils.TraitFactory.SharedContext;
 
 public class ActionFunctions extends UnifiedGameMap implements
     ActionsThinkers, ActionsEnemies, ActionsAttacks, Ai, Attacks, Thinkers, Weapons,
-    p.Actions.ActionsBoom // Latte Doom patch: Boom generalized linedefs
+    p.Actions.ActionsBoom // Latte Doom additive patch: Boom generalized linedefs
 {
     private final SharedContext traitsSharedContext;
     

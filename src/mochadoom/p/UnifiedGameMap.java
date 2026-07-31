@@ -30,7 +30,7 @@ import static utils.GenericCopy.malloc;
 public abstract class UnifiedGameMap implements ThinkerList {
     private static final Logger LOGGER = Loggers.getLogger(UnifiedGameMap.class.getName());
 
-    /** Latte Doom patch: 8-char lump-record string (ANIMATED/SWITCHES parsing). */
+    /** Latte Doom additive patch: 8-char lump-record string (ANIMATED/SWITCHES parsing). */
     static String boomStr(byte[] b, int off) {
         int len = 0;
         while (len < 8 && b[off + len] != 0) {
@@ -264,7 +264,7 @@ public abstract class UnifiedGameMap implements ThinkerList {
         }
 
         public void InitPicAnims() {
-            // Latte Doom patch: Boom ANIMATED lump: custom animation tables
+            // Latte Doom additive patch — Boom ANIMATED lump: custom animation tables
             // (Eviternity's OTEX cycles). 23-byte records {i8 istexture, char[9] end,
             // char[9] start, i32 speed}, terminated by istexture == -1. Falls back to
             // the vanilla table; anims[] grows to fit.
@@ -449,7 +449,7 @@ public abstract class UnifiedGameMap implements ThinkerList {
                 episode = 3;
             }
 
-            // Latte Doom patch: Boom SWITCHES lump: custom switch pairs
+            // Latte Doom additive patch — Boom SWITCHES lump: custom switch pairs
             // (Eviternity). 20-byte records {char[9] off, char[9] on, i16 episode},
             // terminated by episode == 0. Falls back to the vanilla table.
             switchlist_t[] list = alphSwitchList;
@@ -746,7 +746,7 @@ public abstract class UnifiedGameMap implements ThinkerList {
     public void Init() {
         SW.InitSwitchList();
         SPECS.InitPicAnims();
-        // Latte Doom patch: DEH: the sprite-name table can be extended (MBF
+        // Latte Doom additive patch — DEH: the sprite-name table can be extended (MBF
         // sprites 138+) or renamed by a DEHACKED lump; identical to doomsprnames otherwise.
         DOOM.spriteManager.InitSprites(deh.DehState.sprnames());
     }

@@ -49,7 +49,7 @@ public interface ActionsMoveEvents extends ActionTrait {
      */
     boolean crossBoomGeneralized(line_t line, mobj_t thing);
 
-    // Latte Doom patch: Boom fixed extended types (142-269), same
+    // Latte Doom additive patch: Boom fixed extended types (142-269), same
     // hook pattern as the generalized lane; implemented in ActionsBoom.
     boolean crossBoomFixed(line_t line, int side, mobj_t thing);
 
@@ -57,13 +57,13 @@ public interface ActionsMoveEvents extends ActionTrait {
         //line_t line;
         boolean ok;
 
-        // Latte Doom patch: Boom generalized specials (>= 0x2F80) take this
+        // Latte Doom additive patch: Boom generalized specials (>= 0x2F80) take this
         // lane; vanilla specials below never enter it.
         if (crossBoomGeneralized(line, thing)) {
             return;
         }
 
-        // Latte Doom patch: Boom fixed extended types (142-269) take this
+        // Latte Doom additive patch: Boom fixed extended types (142-269) take this
         // lane; vanilla specials (< 142) never enter it.
         if (crossBoomFixed(line, side, thing)) {
             return;

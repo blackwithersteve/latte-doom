@@ -3,9 +3,9 @@ package p;
 import doom.thinker_t;
 
 /**
- * Latte Doom patch: Boom v2.02 scroller thinker state (p_spec.c T_Scroll).
+ * Latte Doom additive patch — Boom v2.02 scroller thinker state (p_spec.c T_Scroll).
  * One instance per scroll effect: walls (sidedef offsets), floors/ceilings (visual),
- * and the CARRY types that convey things standing on the floor: the mechanism Boom
+ * and the CARRY types that convey things standing on the floor — the mechanism Boom
  * maps use to drive voodoo-doll scripting closets.
  */
 public class scroll_t extends thinker_t {

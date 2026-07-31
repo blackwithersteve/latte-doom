@@ -122,7 +122,7 @@ public interface ActionsMobj extends ActionsThings, ActionsMovement, ActionsTele
             //ang >>= ANGLETOFINESHIFT;
             target.momx += FixedMul(thrust, finecosine(ang));
             target.momy += FixedMul(thrust, finesine(ang));
-            // Latte Doom patch: the possessing host wipes player momentum each
+            // Latte Doom additive patch: the possessing host wipes player momentum each
             // frame, so surface the hit direction/impulse for Minecraft knockback
             if (player != null) {
                 final double a = (ang & BITS32) * (Math.PI * 2.0 / 4294967296.0);
@@ -133,7 +133,7 @@ public interface ActionsMobj extends ActionsThings, ActionsMovement, ActionsTele
 
         // player specific
         if (player != null) {
-            // Latte Doom patch: possessed players never die INSIDE the engine,
+            // Latte Doom additive patch: possessed players never die INSIDE the engine —
             // Minecraft owns dying. Without this, a telefrag/crusher outran the host's
             // per-frame health clamp and reached KillMobj -> PST_DEAD -> G_DoReborn ->
             // (!netgame) ga_loadlevel: the engine reloaded the level mid-play and the
@@ -143,11 +143,11 @@ public interface ActionsMobj extends ActionsThings, ActionsMovement, ActionsTele
                 if (floored < 0) {
                     floored = 0;
                 }
-                // Latte Doom patch: the engine floors its own health at 1 hp, so the part it
-                // could not take off (damage - floored) is recorded here for the host to apply
-                // to Minecraft health. Without it a low-health player can never take the
-                // killing blow. Local player only: a remote body's floor is accounted for on
-                // that player's own client.
+                // Latte Doom additive patch (issue A): the engine floors its OWN health at
+                // 1hp, but bank the part it could NOT bill (damage - floored) so the host can
+                // charge the FULL killing blow to Minecraft — a low-health marine MUST be able
+                // to die (MC owns dying). LOCAL player only: a co-op remote body's floor is
+                // that friend's client's business, not ours to bill to our hearts.
                 if (player == getPlayer(0)) {
                     mochadoom.Engine.LETHAL_OVERFLOW.addAndGet(damage - floored);
                 }
@@ -211,7 +211,7 @@ public interface ActionsMobj extends ActionsThings, ActionsMovement, ActionsTele
             && !eval(target.flags & MF_SKULLFLY)) {
             target.flags |= MF_JUSTHIT;    // fight back!
 
-            target.SetMobjStateNum(target.info.painStateNum()); // Latte Doom patch: DEH int state
+            target.SetMobjStateNum(target.info.painStateNum()); // Latte Doom additive patch — DEH int state
         }
 
         target.reactiontime = 0;       // we're awake now...   
@@ -223,7 +223,7 @@ public interface ActionsMobj extends ActionsThings, ActionsMovement, ActionsTele
             // chase after this one
             target.target = source;
             target.threshold = BASETHRESHOLD;
-            // Latte Doom patch: DEH int state
+            // Latte Doom additive patch — DEH int state
             if (target.mobj_state == states[target.info.spawnStateNum()]
                 && target.info.hasSeeState()) {
                 target.SetMobjStateNum(target.info.seeStateNum());
@@ -289,7 +289,7 @@ public interface ActionsMobj extends ActionsThings, ActionsMovement, ActionsTele
 
         }
 
-        // Latte Doom patch: DEH int state
+        // Latte Doom additive patch — DEH int state
         if (target.health < -target.info.spawnhealth && target.info.hasXDeathState()) {
             target.SetMobjStateNum(target.info.xdeathStateNum());
         } else {

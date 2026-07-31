@@ -166,7 +166,7 @@ public interface ActionsAttacks extends ActionsAim, ActionsMobj, ActionsSight, A
         if (thing.mobj_tics != -1) {
             return true;    // not lying still yet
         }
-        if (!thing.info.hasRaiseState()) { // Latte Doom patch: DEH int state
+        if (!thing.info.hasRaiseState()) { // Latte Doom additive patch — DEH int state
             return true;    // monster doesn't have a raise state
         }
         maxdist = thing.info.radius + mobjinfo[mobjtype_t.MT_VILE.ordinal()].radius;

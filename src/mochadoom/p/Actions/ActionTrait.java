@@ -218,7 +218,7 @@ public interface ActionTrait extends Trait, ThinkerList {
             return true;
         }
 
-        // Latte Doom patch: hardening, bounded walk. The self-link guard in SetThingPosition is the
+        // Latte Doom hardening: bounded walk. The self-link guard in SetThingPosition is the
         // real fix, but if any blockmap list is ever cyclic anyway, drop the frame instead of
         // freezing the whole engine (this is where the monster-AI stall was caught). No real
         // blockmap cell holds anywhere near this many things.

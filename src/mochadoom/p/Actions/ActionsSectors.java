@@ -57,7 +57,7 @@ public interface ActionsSectors extends ActionsLights, ActionsFloors, ActionsDoo
     void RemoveMobj(mobj_t thing);
     void DamageMobj(mobj_t thing, mobj_t tmthing, mobj_t tmthing0, int damage);
     mobj_t SpawnMobj(@fixed_t int x, @fixed_t int y, @fixed_t int z, mobjtype_t type);
-    /** Latte Doom patch: DEH: P_SpawnMobj by mobjinfo index (MBF things 137+). */
+    /** Latte Doom additive patch — DEH: P_SpawnMobj by mobjinfo index (MBF things 137+). */
     mobj_t SpawnMobjNum(@fixed_t int x, @fixed_t int y, @fixed_t int z, int typenum);
 
     final class Crushes {

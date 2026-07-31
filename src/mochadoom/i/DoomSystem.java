@@ -259,7 +259,7 @@ public class DoomSystem implements IDoomSystem {
         throw new mochadoom.DoomFatalError(error);
     }
 
-    // Latte Doom patch: no AWT popup boxes inside Minecraft, log and carry on.
+    // Cocoa Doom: no AWT popup boxes inside Minecraft — log and carry on.
     @Override
     public boolean GenerateAlert(String title, String cause) {
         System.out.println(title + ": " + cause);

@@ -188,7 +188,7 @@ public class HU implements IHeadsUp{
                 THUSTR_31, THUSTR_32 };
 
     /**
-     * Latte Doom patch: DEH [STRINGS]: swap a level name in the live tables
+     * Latte Doom additive patch — DEH [STRINGS]: swap a level name in the live tables
      * (HUSTR/PHUSTR/THUSTR mnemonics; the englsh constants are inlined by javac
      * so the arrays are the only runtime home). which: 0 = doom1 (ExMy index),
      * 1 = doom2, 2 = plutonia, 3 = tnt. Returns false when out of range.

@@ -151,8 +151,8 @@ public class SimpleTextureManager implements TextureManager<byte[]> {
             i = CheckTextureNumForName(name);
 
             if (i == -1) {
-                // Latte Doom patch: (Boom behavior): a missing texture must not
-                // KILL the engine: a PWAD replacing TEXTURE1 wholesale (Eviternity on
+                // Latte Doom additive patch (Boom behavior): a missing texture must not
+                // KILL the engine — a PWAD replacing TEXTURE1 wholesale (Eviternity on
                 // the wrong IWAD) made every unmatched name a fatal. Log, render zero.
                 System.err.println("R_TextureNumForName: " + name + " not found (using 0)");
                 return 0;

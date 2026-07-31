@@ -32,14 +32,14 @@ public enum floor_e {
     donutRaise,
     raiseFloor512,
 
-    // Latte Doom patch: Boom generalized floors (p_genlin.c):
+    // Latte Doom additive patch — Boom generalized floors (p_genlin.c):
     // plain move / move+change with special zeroed / with special copied / texture only
     genFloor,
     genFloorChg0,
     genFloorChgT,
     genFloorChg,
 
-    // Latte Doom patch: Boom fixed types 219-222: lower floor to the next
+    // Latte Doom additive patch — Boom fixed types 219-222: lower floor to the next
     // lower neighbor (P_FindNextLowestFloor). Appended so vanilla ordinals hold.
     lowerFloorToNearest
 }

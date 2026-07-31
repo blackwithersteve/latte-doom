@@ -111,7 +111,13 @@ public class GammaTables {
     };
     
     static {
-        if (Engine.getConfig().equals(Settings.fix_gamma_ramp, Boolean.TRUE)) {
+        // Latte Doom patch: Engine.getConfig() CONSTRUCTS an engine when none exists
+        // yet, and this class now loads from the Minecraft client before any engine
+        // boots — the construction died in W_InitFiles with no WAD and took the whole
+        // game launch with it. The ramp tweak is an engine setting, so it only applies
+        // when an engine is already alive to be asked.
+        if (Engine.getEngineOrNull() != null
+            && Engine.getConfig().equals(Settings.fix_gamma_ramp, Boolean.TRUE)) {
             for (int i = 0; i < 128; --LUT[0][i++]) {}
         }
     }

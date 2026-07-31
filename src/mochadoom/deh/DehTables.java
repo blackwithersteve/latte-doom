@@ -7,7 +7,7 @@ import java.util.Map;
 import p.mobj_t;
 
 /**
- * Latte Doom patch: DEHACKED/BEX static data.
+ * Latte Doom additive patch — DEHACKED/BEX static data (M-BOOM slice 7).
  *
  * MBF's table extensions (states 967..1075, mobjinfo 137..143, sprites 138..143)
  * mechanically extracted from MBF-family source (Nugget Doom's info.c, which keeps
@@ -89,7 +89,7 @@ public final class DehTables {
     /**
      * MBF dog sounds 109..113 (sfx_dgsit/dgatk/dgact/dgdth/dgpain) have no slots in
      * mocha's sfxenum_t; mapped to their closest vanilla demon equivalents. A disclosed
-     * fidelity compromise: the Nightmare Demon barks like a pinky until sounds grow slots.
+     * fidelity compromise — the Nightmare Demon barks like a pinky until sounds grow slots.
      */
     static final String[] MBF_DOG_SFX_SUBST = { "sfx_sgtsit", "sfx_sgtatk", "sfx_dmact", "sfx_sgtdth", "sfx_dmpain" };
 

@@ -92,7 +92,7 @@ public interface Ai extends Monsters, Sounds {
             }
         }
 
-        actor.SetMobjStateNum(actor.info.seeStateNum()); // Latte Doom patch: DEH int state
+        actor.SetMobjStateNum(actor.info.seeStateNum()); // Latte Doom additive patch — DEH int state
     }
 
     /**
@@ -139,7 +139,7 @@ public interface Ai extends Monsters, Sounds {
             if (getEnemies().LookForPlayers(actor, true)) {
                 return;     // got a new target
             }
-            actor.SetMobjStateNum(actor.info.spawnStateNum()); // Latte Doom patch: DEH int state
+            actor.SetMobjStateNum(actor.info.spawnStateNum()); // Latte Doom additive patch — DEH int state
             return;
         }
 
@@ -153,16 +153,16 @@ public interface Ai extends Monsters, Sounds {
         }
 
         // check for melee attack
-        if (actor.info.hasMeleeState() && getEnemies().CheckMeleeRange(actor)) { // Latte Doom patch: DEH int state
+        if (actor.info.hasMeleeState() && getEnemies().CheckMeleeRange(actor)) { // Latte Doom additive patch — DEH int state
             if (actor.info.attacksound != null) {
                 StartSound(actor, actor.info.attacksound);
             }
-            actor.SetMobjStateNum(actor.info.meleeStateNum()); // Latte Doom patch: DEH int state
+            actor.SetMobjStateNum(actor.info.meleeStateNum()); // Latte Doom additive patch — DEH int state
             return;
         }
 
         // check for missile attack
-        if (actor.info.hasMissileState()) { // Latte Doom patch: DEH int state //_D_: this caused a bug where Demon for example were disappearing
+        if (actor.info.hasMissileState()) { // Latte Doom additive patch — DEH int state //_D_: this caused a bug where Demon for example were disappearing
             // Assume that a missile attack is possible
             if (getGameSkill().ordinal() < skill_t.sk_nightmare.ordinal() && !IsFastParm() && actor.movecount != 0) {
                 // Uhm....no.
@@ -172,7 +172,7 @@ public interface Ai extends Monsters, Sounds {
             }
             if (!nomissile) {
                 // Perform the attack
-                actor.SetMobjStateNum(actor.info.missileStateNum()); // Latte Doom patch: DEH int state
+                actor.SetMobjStateNum(actor.info.missileStateNum()); // Latte Doom additive patch — DEH int state
                 actor.flags |= MF_JUSTATTACKED;
                 return;
             }
@@ -239,7 +239,7 @@ public interface Ai extends Monsters, Sounds {
 
             // you can cycle through multiple states in a tic
             if (!eval(mobj.mobj_tics)) {
-                if (!mobj.SetMobjStateNum(mobj.mobj_state.dehNextState())) { // Latte Doom patch: DEH int state
+                if (!mobj.SetMobjStateNum(mobj.mobj_state.dehNextState())) { // Latte Doom additive patch — DEH int state
                     // freed itself
                 }
             }

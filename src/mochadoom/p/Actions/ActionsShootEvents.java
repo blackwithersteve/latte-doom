@@ -35,7 +35,7 @@ public interface ActionsShootEvents extends ActionsSpawns {
      */
     boolean shootBoomGeneralized(mobj_t thing, line_t line);
 
-    // Latte Doom patch: Boom fixed extended types (142-269), same
+    // Latte Doom additive patch: Boom fixed extended types (142-269), same
     // hook pattern as the generalized lane; implemented in ActionsBoom.
     boolean shootBoomFixed(mobj_t thing, line_t line);
 
@@ -43,12 +43,12 @@ public interface ActionsShootEvents extends ActionsSpawns {
         final Switches sw = getSwitches();
         boolean ok;
 
-        // Latte Doom patch: Boom generalized specials take this lane.
+        // Latte Doom additive patch: Boom generalized specials take this lane.
         if (shootBoomGeneralized(thing, line)) {
             return;
         }
 
-        // Latte Doom patch: Boom fixed extended types (142-269) take
+        // Latte Doom additive patch: Boom fixed extended types (142-269) take
         // this lane; vanilla specials (< 142) never enter it.
         if (shootBoomFixed(thing, line)) {
             return;

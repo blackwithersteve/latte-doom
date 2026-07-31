@@ -25,7 +25,7 @@ public class ceiling_t extends SectorAction implements CacheableDoomObject, IRea
     public int tag;
     public int olddirection;
 
-    // Latte Doom patch: Boom generalized change models, applied on arrival
+    // Latte Doom additive patch — Boom generalized change models, applied on arrival
     // by MoveCeiling: the new ceilingpic, and the new sector special (-1 = leave it)
     public short genTexture = -1;
     public int genNewSpecial = -1;

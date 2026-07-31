@@ -42,7 +42,7 @@ public interface ActionsFloors extends ActionsPlats {
     side_t getSide(int secnum, int i, int s);
     sector_t getSector(int secnum, int i, int i0);
 
-    // Latte Doom patch: Boom P_FindNextLowestFloor, declared here so the
+    // Latte Doom additive patch: Boom P_FindNextLowestFloor, declared here so the
     // fixed types 219-222 can use it; the implementation lives in ActionsBoom.
     int boomFindNextLowestFloor(sector_t sec, int currentheight);
 
@@ -64,7 +64,7 @@ public interface ActionsFloors extends ActionsPlats {
         if (res == result_e.pastdest) {
             floor.sector.specialdata = null;
 
-            // Latte Doom patch: Boom generalized change models land here,
+            // Latte Doom additive patch — Boom generalized change models land here,
             // regardless of direction (Boom T_MoveFloor):
             switch (floor.type) {
                 case genFloorChgT:
@@ -148,7 +148,7 @@ public interface ActionsFloors extends ActionsPlats {
                     floor.floordestheight = sec.FindLowestFloorSurrounding();
                     break;
 
-                // Latte Doom patch: Boom fixed types 219-222 (p_floor.c):
+                // Latte Doom additive patch — Boom fixed types 219-222 (p_floor.c):
                 // lower floor to the next lower surrounding floor
                 case lowerFloorToNearest:
                     floor.direction = -1;
@@ -399,7 +399,7 @@ public interface ActionsFloors extends ActionsPlats {
                     StartSound(plat.sector.soundorg, sounds.sfxenum_t.sfx_pstart);
                 } else {
                     if (res == result_e.pastdest) {
-                        // Latte Doom patch: Boom toggle plats (211/212)
+                        // Latte Doom additive patch — Boom toggle plats (211/212)
                         // are instant + silent: go into stasis awaiting the next
                         // toggle instead of waiting (jff 3/14/98)
                         if (plat.type == plattype_e.toggleUpDn) {
@@ -433,7 +433,7 @@ public interface ActionsFloors extends ActionsPlats {
                 res = MovePlane(plat.sector, plat.speed, plat.low, false, 0, -1);
 
                 if (res == result_e.pastdest) {
-                    // Latte Doom patch: Boom toggle plats (211/212):
+                    // Latte Doom additive patch — Boom toggle plats (211/212):
                     // silent, instant, no waiting; stasis until reactivated
                     if (plat.type == plattype_e.toggleUpDn) {
                         plat.oldstatus = plat.status;

@@ -4,7 +4,7 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * Latte Doom patch: DEHACKED/BEX parser.
+ * Latte Doom additive patch — DEHACKED/BEX parser (M-BOOM slice 7).
  *
  * Text-format DEHACKED (v2.3+ text patches, "Patch format = 5/6") plus the BEX
  * extensions Boom/MBF wads ship ([CODEPTR], [STRINGS], [PARS]). Binary .deh
@@ -81,7 +81,7 @@ public final class DehParser {
                 } else if (lower.equals("[pars]")) {
                     pendingLine = bexPars();
                 } else if (lower.startsWith("[")) {
-                    // [SPRITES]/[SOUNDS]/[MUSIC]/[HELPER]...: recognized BEX blocks we skip whole
+                    // [SPRITES]/[SOUNDS]/[MUSIC]/[HELPER]... — recognized BEX blocks we skip whole
                     patch.unknownSections++;
                     patch.problem("unsupported BEX block " + line + " (skipped)");
                     pendingLine = skipBlock();
@@ -129,7 +129,7 @@ public final class DehParser {
     /**
      * A section header is "&lt;keyword&gt; &lt;number&gt; ..." (or a bracketed BEX block).
      * The number requirement matters: field lines like "Ammo type = 2" or [CODEPTR]
-     * lines like "FRAME 1024 = FatAttack1" must NOT be mistaken for headers: the
+     * lines like "FRAME 1024 = FatAttack1" must NOT be mistaken for headers — the
      * latter is only a header when we are not inside [CODEPTR] (content is tried first).
      */
     private static final java.util.regex.Pattern SECTION_HEADER = java.util.regex.Pattern
@@ -147,7 +147,7 @@ public final class DehParser {
         if (!SECTION_HEADER.matcher(l).matches()) {
             return false;
         }
-        // "FRAME 1024 = FatAttack1" carries an '=': that's [CODEPTR] content, not a header
+        // "FRAME 1024 = FatAttack1" carries an '=' — that's [CODEPTR] content, not a header
         return l.indexOf('=') < 0;
     }
 

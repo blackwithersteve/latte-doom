@@ -92,7 +92,7 @@ public class sector_t implements IReadableDoomObject, IPackableDoomObject, Reset
     /** killough 1/30/98: improves searches for tags. */
     public int nexttag,firsttag;
 
-    // ---- Latte Doom patch: Boom v2.02 friction (linedef type 223) ----
+    // ---- Latte Doom additive patch: Boom v2.02 friction (linedef type 223) ----
     /** Boom p_spec.h ORIG_FRICTION: the vanilla XYMovement friction constant. */
     public static final int ORIG_FRICTION = 0xE800;
     /** Boom p_spec.h ORIG_FRICTION_FACTOR: vanilla P_MovePlayer thrust scale (2048). */
@@ -104,7 +104,7 @@ public class sector_t implements IReadableDoomObject, IPackableDoomObject, Reset
     /**
      * Per-sector friction, set once by P_SpawnFriction from the 223 line's length and
      * applied (players only, on-floor only) while the sector special carries
-     * {@link #FRICTION_MASK}. ORIG_FRICTION means "vanilla floor": the untouched path.
+     * {@link #FRICTION_MASK}. ORIG_FRICTION means "vanilla floor" — the untouched path.
      * Boom 2.02 kept these on per-sector friction thinkers writing mobj fields each tic;
      * storing them on the sector is killough's (behavior-preserving) MBF simplification.
      */
@@ -334,7 +334,7 @@ public class sector_t implements IReadableDoomObject, IPackableDoomObject, Reset
         linecount = 0;
         lines = null;
         id = -1;
-        // Latte Doom patch: Boom friction fields back to vanilla on reuse
+        // Latte Doom additive patch: Boom friction fields back to vanilla on reuse
         boomFriction = ORIG_FRICTION;
         boomMoveFactor = ORIG_FRICTION_FACTOR;
 

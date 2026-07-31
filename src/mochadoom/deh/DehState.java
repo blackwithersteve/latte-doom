@@ -14,7 +14,7 @@ import p.ActiveStates;
 import rr.ISpriteManager;
 
 /**
- * Latte Doom patch: DEHACKED/BEX runtime table state.
+ * Latte Doom additive patch — DEHACKED/BEX runtime table state (M-BOOM slice 7).
  *
  * Mocha types its state machine with Java enums (statenum_t/spritenum_t/mobjtype_t),
  * which cannot grow at runtime. MBF-class DEH patches reference indices past the
@@ -25,9 +25,9 @@ import rr.ISpriteManager;
  *  - enum-typed fields keep a best-effort enum (real one when in vanilla range, a
  *    neutral placeholder otherwise) while parallel int fields added to state_t /
  *    mobjinfo_t / mobj_t carry the true index; the state walker and the handful of
- *    consumer sites prefer the ints (all marked "Latte Doom patch: - DEH").
+ *    consumer sites prefer the ints (all marked "Latte Doom additive patch -- DEH").
  *
- * Everything here is inert until a DEHACKED lump requires it.
+ * Everything here is inert until a DEHACKED lump actually needs it.
  */
 public final class DehState {
 
@@ -48,6 +48,101 @@ public final class DehState {
     private static ActiveStates[] originalActions = null;
 
     private static final Set<String> loggedOnce = new HashSet<>();
+
+    // ------------------------------------------------------------- pristine restore
+    // Latte Doom patch: every table below is a JVM-lifetime static that apply() mutates
+    // in place. A new engine boot re-applies its own WAD set's patches, but nothing ever
+    // un-applied the previous set's — load a smoothing patch, then load plain TNT, and
+    // TNT ran on the smoothed tables without the patch's art. The first restore call
+    // captures the untouched tables; every later call rebuilds them from that capture.
+
+    private static state_t[] pristineStates;
+    private static mobjinfo_t[] pristineMobjinfo;
+    private static doom.weaponinfo_t[] pristineWeapons;
+    private static int[] pristineMaxammo;
+    private static int[] pristineClipammo;
+
+    private static state_t copyState(state_t o) {
+        final state_t c = new state_t(o.sprite, o.frame, o.tics, o.action, o.nextstate,
+            o.misc1, o.misc2);
+        c.id = o.id;
+        c.dehnext = o.dehnext;
+        c.dehsprite = o.dehsprite;
+        return c;
+    }
+
+    private static mobjinfo_t copyInfo(mobjinfo_t o) {
+        final mobjinfo_t c = new mobjinfo_t(o.doomednum, o.spawnstate, o.spawnhealth,
+            o.seestate, o.seesound, o.reactiontime, o.attacksound, o.painstate,
+            o.painchance, o.painsound, o.meleestate, o.missilestate, o.deathstate,
+            o.xdeathstate, o.deathsound, o.speed, o.radius, o.height, o.mass, o.damage,
+            o.activesound, o.flags, o.raisestate);
+        c.dehspawnstate = o.dehspawnstate;
+        c.dehseestate = o.dehseestate;
+        c.dehpainstate = o.dehpainstate;
+        c.dehmeleestate = o.dehmeleestate;
+        c.dehmissilestate = o.dehmissilestate;
+        c.dehdeathstate = o.dehdeathstate;
+        c.dehxdeathstate = o.dehxdeathstate;
+        c.dehraisestate = o.dehraisestate;
+        return c;
+    }
+
+    private static doom.weaponinfo_t copyWeapon(doom.weaponinfo_t o) {
+        return new doom.weaponinfo_t(o.ammo, o.upstate, o.downstate, o.readystate,
+            o.atkstate, o.flashstate);
+    }
+
+    /** Called at every boot before the WAD set's patches apply: first call captures the
+     * untouched tables, every later call puts them back. */
+    public static synchronized void restoreVanilla() {
+        if (pristineStates == null) {
+            pristineStates = new state_t[info.states.length];
+            for (int i = 0; i < info.states.length; i++) {
+                pristineStates[i] = copyState(info.states[i]);
+            }
+            pristineMobjinfo = new mobjinfo_t[info.mobjinfo.length];
+            for (int i = 0; i < info.mobjinfo.length; i++) {
+                pristineMobjinfo[i] = copyInfo(info.mobjinfo[i]);
+            }
+            pristineWeapons = new doom.weaponinfo_t[doom.items.weaponinfo.length];
+            for (int i = 0; i < doom.items.weaponinfo.length; i++) {
+                pristineWeapons[i] = copyWeapon(doom.items.weaponinfo[i]);
+            }
+            pristineMaxammo = Arrays.copyOf(doom.DoomStatus.maxammo,
+                doom.DoomStatus.maxammo.length);
+            pristineClipammo = Arrays.copyOf(doom.player_t.clipammo,
+                doom.player_t.clipammo.length);
+            return;
+        }
+        final state_t[] ns = new state_t[pristineStates.length];
+        for (int i = 0; i < ns.length; i++) {
+            ns[i] = copyState(pristineStates[i]);
+        }
+        info.states = ns;
+        final mobjinfo_t[] nm = new mobjinfo_t[pristineMobjinfo.length];
+        for (int i = 0; i < nm.length; i++) {
+            nm[i] = copyInfo(pristineMobjinfo[i]);
+        }
+        info.mobjinfo = nm;
+        for (int i = 0; i < doom.items.weaponinfo.length && i < pristineWeapons.length; i++) {
+            final doom.weaponinfo_t w = doom.items.weaponinfo[i];
+            final doom.weaponinfo_t o = pristineWeapons[i];
+            w.ammo = o.ammo;
+            w.upstate = o.upstate;
+            w.downstate = o.downstate;
+            w.readystate = o.readystate;
+            w.atkstate = o.atkstate;
+            w.flashstate = o.flashstate;
+        }
+        System.arraycopy(pristineMaxammo, 0, doom.DoomStatus.maxammo, 0,
+            pristineMaxammo.length);
+        System.arraycopy(pristineClipammo, 0, doom.player_t.clipammo, 0,
+            pristineClipammo.length);
+        sprnames = null;          // back to the built-in name table
+        originalActions = null;   // vanilla Pointer sections re-capture freshly
+        active = false;
+    }
 
     /** One-time log, keyed by message. */
     public static void logOnce(String msg) {

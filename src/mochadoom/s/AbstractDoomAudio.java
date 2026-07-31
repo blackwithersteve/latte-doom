@@ -163,10 +163,10 @@ public class AbstractDoomAudio implements IDoomSound{
 					musicenum_t.mus_e1m9	// Tim		e4m9
 			};
 
-			// Latte Doom patch: SIGIL-class episodes (E5+, or any PWAD shipping
-			// its own D_ExMy lumps for E4+) never played their music: vanilla remaps
+			// Latte Doom additive patch: SIGIL-class episodes (E5+, or any PWAD shipping
+			// its own D_ExMy lumps for E4+) never played their music — vanilla remaps
 			// every episode >= 4 to the Ultimate E4 track list below. If this episode's
-			// own music lump exists in the loaded WAD set, it is played directly instead.
+			// OWN music lump exists in the loaded WAD set, play it directly instead.
 			if (DS.gameepisode >= 4) {
 				final String own = String.format("e%dm%d", DS.gameepisode, DS.gamemap);
 				if (DS.wadLoader.CheckNumForName("D_" + own.toUpperCase()) >= 0) {
@@ -198,9 +198,9 @@ public class AbstractDoomAudio implements IDoomSound{
 			int		sfx_id,
 			int		volume )
 	{
-		// Latte Doom patch: surface each sound event to the host, so other Minecraft
-		// players can hear this world. Each client renders the sfx id from its own WAD:
-		// events cross the wire, content never does.
+		// Latte Doom additive patch: surface every sound EVENT to the host, so other
+		// Minecraft players can hear this world (each client renders the sfx id from
+		// its OWN WAD — events cross the wire, content never does).
 		if (mochadoom.Engine.SOUND_TAP != null) {
 			try {
 				mochadoom.Engine.SOUND_TAP.accept(origin_p, sfx_id);
@@ -286,9 +286,9 @@ public class AbstractDoomAudio implements IDoomSound{
 			sep = NORM_SEP;
 		}
 
-		// Latte Doom patch: random per-sound pitch variation removed. Every effect plays at
-		// the deterministic base pitch assigned above, either the normal pitch or the
-		// effect's own for linked sounds, which matches the original's default configuration.
+		// Latte Doom patch: random per-sound pitch variation removed. Every sfx
+		// plays at its deterministic base pitch assigned
+		// above (NORM_PITCH, or sfx.pitch for linked sounds), like vanilla DOOM's default.
 
 		// kill old sound
 		StopSound(origin);
@@ -337,9 +337,12 @@ public class AbstractDoomAudio implements IDoomSound{
 		// ones map with the "soft" ones?
 		// Essentially we're begging to get an actual channel.		
 		
+		// The driver's volume domain is 0..127 (vol_lookup normalizes by /127) while
+		// snd_SfxVolume steps 0..15 — DMX scaled by 8 at this seam. Without it every
+		// channel tops out at ~12% amplitude.
 		channels[cnum].handle = ISND.StartSound(sfx_id,
 				/*sfx->data,*/
-				volume,
+				volume * 8,
 				sep,
 				pitch,
 				priority);
@@ -542,7 +545,8 @@ public class AbstractDoomAudio implements IDoomSound{
 							StopChannel(cnum);
 						}
 						else
-							ISND.UpdateSoundParams(c.handle, vps.volume, vps.sep, vps.pitch);
+							// same 0..15 -> 0..120 scaling as StartSound
+							ISND.UpdateSoundParams(c.handle, vps.volume * 8, vps.sep, vps.pitch);
 					}
 				}
 				else
@@ -646,8 +650,8 @@ public class AbstractDoomAudio implements IDoomSound{
 		mus_playing = music;
 	}
 
-	/** Latte Doom patch: play a music lump by its ExMy name (e.g. "e5m1" ->
-	 *  lump D_E5M1): for PWAD episodes beyond the vanilla music tables (SIGIL). Mirrors
+	/** Latte Doom additive patch: play a music lump by its ExMy name (e.g. "e5m1" ->
+	 *  lump D_E5M1) — for PWAD episodes beyond the vanilla music tables (SIGIL). Mirrors
 	 *  ChangeMusic's load/register/play sequence with a transient musicinfo_t. */
 	public void ChangeMusicNamed(String name, boolean looping)
 	{

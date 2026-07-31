@@ -88,7 +88,7 @@ public interface Viles extends ActionTrait {
                         StartSound(att.vileCorpseHit, sounds.sfxenum_t.sfx_slop);
                         info = att.vileCorpseHit.info;
 
-                        att.vileCorpseHit.SetMobjStateNum(info.raiseStateNum()); // Latte Doom patch: DEH int state
+                        att.vileCorpseHit.SetMobjStateNum(info.raiseStateNum()); // Latte Doom additive patch — DEH int state
                         att.vileCorpseHit.height <<= 2;
                         att.vileCorpseHit.flags = info.flags;
                         att.vileCorpseHit.health = info.spawnhealth;

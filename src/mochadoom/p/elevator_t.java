@@ -4,10 +4,10 @@ import doom.SourceCode.fixed_t;
 import rr.SectorAction;
 
 /**
- * Latte Doom patch: Boom v2.02 elevator thinker state (p_spec.h elevator_t).
- * An elevator moves a sector's floor and ceiling together, keeping their gap constant
+ * Latte Doom additive patch — Boom v2.02 elevator thinker state (p_spec.h elevator_t).
+ * An elevator moves a sector's floor AND ceiling together, keeping their gap constant
  * (jff 2/22/98). Driven by the T_MoveElevator ticker in ActionsBoom; created only by
- * the Boom fixed linedef types 227-238: vanilla never instantiates one.
+ * the Boom fixed linedef types 227-238 — vanilla never instantiates one.
  */
 public class elevator_t extends SectorAction {
 

@@ -79,7 +79,7 @@ public interface ActionsThings extends ActionTrait {
             movm.tmthing.flags &= ~MF_SKULLFLY;
             movm.tmthing.momx = movm.tmthing.momy = movm.tmthing.momz = 0;
 
-            movm.tmthing.SetMobjStateNum(movm.tmthing.info.spawnStateNum()); // Latte Doom patch: DEH int state
+            movm.tmthing.SetMobjStateNum(movm.tmthing.info.spawnStateNum()); // Latte Doom additive patch — DEH int state
 
             return false;       // stop moving
         }
@@ -502,7 +502,7 @@ public interface ActionsThings extends ActionTrait {
                 break;
 
             default:
-                // Latte Doom patch: DEH: patched content can flag arbitrary
+                // Latte Doom additive patch — DEH: patched content can flag arbitrary
                 // things MF_SPECIAL (e.g. MBF's beta sceptre/bible); ignore the touch
                 // instead of a fatal error when a DEH patch is active. Vanilla keeps
                 // the original hard failure.

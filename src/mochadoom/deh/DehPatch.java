@@ -6,7 +6,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Latte Doom patch: DEHACKED/BEX parsed patch model.
+ * Latte Doom additive patch — DEHACKED/BEX: parsed patch model (M-BOOM slice 7).
  *
  * One instance per DEHACKED lump / .deh file. Purely passive data: the parser
  * (DehParser) fills it, the applier (DehLoader) walks it. Numbers use DEH
