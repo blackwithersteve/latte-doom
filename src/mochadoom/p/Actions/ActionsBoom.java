@@ -982,8 +982,8 @@ public interface ActionsBoom extends ActionsFloors, ActionsMoveEvents, ActionsUs
 
     // ============================================================ BOOM SCROLLERS
     // p_spec.c T_Scroll / P_SpawnScrollers: walls, flats and the CARRY conveyors that
-    // drive voodoo-doll script closets (without carry the dolls never cross their
-    // trigger lines and map scripting silently never runs).
+    // drive voodoo-doll script closets. Without the carry conveyors those scripts never
+    // run, because nothing conveys the dolls across their trigger lines.
 
     int SCROLL_SHIFT = 5;
     int CARRYFACTOR = 6144; // FRACUNIT * 0.09375 — with DOOM friction, steady drift = line speed

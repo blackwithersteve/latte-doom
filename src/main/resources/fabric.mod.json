@@ -3,7 +3,7 @@
 	"id": "lattedoom",
 	"version": "${version}",
 	"name": "Latte Doom",
-	"description": "A DOOM source port whose renderer is the Minecraft world. The real id Tech 1 engine (via Mocha Doom) runs inside Minecraft's JVM and owns ALL simulation — collision, monsters, specials, RNG, 35Hz tics — while the level is rendered as walkable 3D geometry around you. Lineage: Chocolate Doom -> Mocha Doom -> Cocoa Doom -> Latte Doom.",
+	"description": "A DOOM source port whose renderer is the Minecraft world. The id Tech 1 engine, via Mocha Doom, runs inside Minecraft's JVM and owns all simulation: collision, monsters, specials, RNG and 35Hz tics. The level is rendered as walkable geometry around you.",
 	"authors": [
 		"blackwithersteve"
 	],

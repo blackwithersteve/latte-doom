@@ -23,6 +23,40 @@ import java.util.Map;
 public final class LatteWorldRenderer {
 
     private static final int FULLBRIGHT = 0xF000F0;
+
+    // world-space cull boxes, rebuilt when the origin/bounds-map change AND when
+    // a sector's own bounds array is replaced — the deferred rebake swaps the
+    // per-sector array in place when a mover STOPS, and a cache that missed that
+    // kept culling an opened door by its closed-shape box (review finding)
+    private record CachedBox(double[] source, net.minecraft.world.phys.AABB box) {
+    }
+
+    private static final Map<Integer, CachedBox> BOX_CACHE = new HashMap<>();
+    private static Object boxBoundsRef;
+    private static double boxOx = Double.NaN, boxOy, boxOz;
+
+    private static net.minecraft.world.phys.AABB cachedBox(int sector,
+            Map<Integer, double[]> bounds, double ox, double oy, double oz) {
+        if (boxBoundsRef != bounds || boxOx != ox || boxOy != oy || boxOz != oz) {
+            BOX_CACHE.clear();
+            boxBoundsRef = bounds;
+            boxOx = ox;
+            boxOy = oy;
+            boxOz = oz;
+        }
+        final double[] b = bounds.get(sector);
+        if (b == null) {
+            return null;
+        }
+        CachedBox c = BOX_CACHE.get(sector);
+        if (c == null || c.source() != b) {
+            c = new CachedBox(b, new net.minecraft.world.phys.AABB(
+                ox + b[0] - 1, oy + b[1] - 1, oz + b[2] - 1,
+                ox + b[3] + 1, oy + b[4] + 1, oz + b[5] + 1));
+            BOX_CACHE.put(sector, c);
+        }
+        return c.box();
+    }
     private static final Map<String, Identifier> IDS = new HashMap<>();
     private static final org.slf4j.Logger LOGGER =
         org.slf4j.LoggerFactory.getLogger("lattedoom");
@@ -56,6 +90,7 @@ public final class LatteWorldRenderer {
         final net.minecraft.client.renderer.culling.Frustum frustum =
             lrs.cameraRenderState.cullFrustum;
         final Map<Integer, double[]> bounds = LatteWorld.sectorBounds();
+        LatteFrameStats.frame();
         final double ox = LatteWorld.originX(), oy = LatteWorld.originY(), oz = LatteWorld.originZ();
 
         // S2 — PERSISTENT GEOMETRY: the level's static geometry is baked into GPU buffers
@@ -82,16 +117,16 @@ public final class LatteWorldRenderer {
         if (!persist) {
             // ---- CLASSIC PER-FRAME PATH: flatten per-sector groups into one draw per texture;
             // animated flats/walls resolve their CURRENT frame here (P_UpdateSpecials timing).
+            final long ft0 = LatteFrameStats.t();
             int total = 0, culled = 0;
             final Map<Identifier, List<float[]>> frame = new HashMap<>();
             for (Map.Entry<Integer, Map<String, float[]>> g : groups.entrySet()) {
                 total++;
                 final boolean isMoving = moving.contains(g.getKey());
                 if (CULL_ENABLED && frustum != null && !isMoving && bounds != null) {
-                    final double[] b = bounds.get(g.getKey());
-                    if (b != null && !frustum.isVisible(new net.minecraft.world.phys.AABB(
-                            ox + b[0] - 1, oy + b[1] - 1, oz + b[2] - 1,
-                            ox + b[3] + 1, oy + b[4] + 1, oz + b[5] + 1))) {
+                    final net.minecraft.world.phys.AABB box =
+                        cachedBox(g.getKey(), bounds, ox, oy, oz);
+                    if (box != null && !frustum.isVisible(box)) {
                         culled++;
                         continue; // out of view — do not submit
                     }
@@ -111,6 +146,8 @@ public final class LatteWorldRenderer {
                         .add(e.getValue());
                 }
             }
+            LatteFrameStats.flatten(ft0);
+            LatteFrameStats.sectors(total - culled, culled);
             if (frustum != null && (frameCount++ % 200) == 0) {
                 LOGGER.info("LatteWorld cull: {} of {} sectors drawn ({} culled)",
                     total - culled, total, culled);
@@ -122,19 +159,73 @@ public final class LatteWorldRenderer {
                 // INTO the rooms. Double-faced walls showed mirrored exteriors no real
                 // port shows. What sells the outside view there is not back faces, it is
                 // the SKY drawn as surfaces rather than a backdrop — the sky pass below.
-                collector.submitCustomGeometry(pose, RenderTypes.entityCutout(e.getKey()),
+                net.minecraft.client.renderer.rendertype.RenderType litType = null;
+                if (LatteMesh.doomLight()) {
+                    litType = WorldLightPipeline.type(e.getKey());
+                }
+                final boolean lit = litType != null;
+                final var worldType = lit ? litType : RenderTypes.entityCutout(e.getKey());
+                collector.submitCustomGeometry(pose, worldType,
                     (p, vc) -> {
+                        final long lt0 = LatteFrameStats.t();
+                        final boolean dbg = LatteMesh.debugFlatLight();
+                        final int boost = LatteMesh.lightBoost();
+                        final int extra = LatteWorld.extraLightBytes();
+                        final int gammaA = LatteMesh.gammaAlpha();
+                        int lverts = 0;
                         for (float[] v : lists) {
+                            if (v.length < 6) {
+                                continue;
+                            }
+                            lverts += v.length / 6;
+                            // each array is ONE sector's quads (groups bake per
+                            // sector): resolve its light once, not per vertex —
+                            // the per-vertex lightOf chain was a top frame term
+                            final int raw = LatteWorld.lightOf((int) v[5]);
+                            final int light = Math.max(0, Math.min(255, raw + boost + extra));
+                            final int flatShade = lit ? 0
+                                : LatteMesh.shadeByte(Math.min(255, raw + extra));
+                            int contrast = 128;
                             for (int i = 0; i < v.length; i += 6) {
-                                final int c = LatteMesh.shadeByte(LatteWorld.lightOf((int) v[i + 5]));
-                                vc.addVertex(p, v[i], v[i + 1], v[i + 2])
-                                  .setColor(c, c, c, 255)
-                                  .setUv(v[i + 3], v[i + 4])
-                                  .setOverlay(OverlayTexture.NO_OVERLAY)
-                                  .setLight(FULLBRIGHT)
-                                  .setNormal(p, 0.0f, 1.0f, 0.0f);
+                                if (lit && (i % 24) == 0 && i + 23 < v.length) {
+                                    // fake contrast per QUAD from its true geometry —
+                                    // the in-shader derivative version flickered
+                                    // triangles at grazing angles. A flat has all four
+                                    // heights equal; a wall's horizontal edge is the
+                                    // seg: constant world-x = +1 band, constant
+                                    // world-z = -1, diagonal none.
+                                    final float y0 = v[i + 1], y1 = v[i + 7];
+                                    final float y2 = v[i + 13], y3 = v[i + 19];
+                                    if (y0 == y1 && y1 == y2 && y2 == y3) {
+                                        contrast = 128;
+                                    } else {
+                                        final int base = y0 == y1 ? i : y1 == y2 ? i + 6 : i + 12;
+                                        final float dx = v[base + 6] - v[base];
+                                        final float dz = v[base + 8] - v[base + 2];
+                                        contrast = dx == 0 ? 255 : dz == 0 ? 0 : 128;
+                                    }
+                                }
+                                if (lit) {
+                                    // the encoding: R = light with
+                                    // boost, G = contrast, B = gamma/4, opaque alpha
+                                    vc.addVertex(p, v[i], v[i + 1], v[i + 2])
+                                      .setColor(dbg ? 255 : light, dbg ? 128 : contrast,
+                                          dbg ? 64 : gammaA, 255)
+                                      .setUv(v[i + 3], v[i + 4])
+                                      .setOverlay(OverlayTexture.NO_OVERLAY)
+                                      .setLight(FULLBRIGHT)
+                                      .setNormal(p, 0.0f, 1.0f, 0.0f);
+                                } else {
+                                    vc.addVertex(p, v[i], v[i + 1], v[i + 2])
+                                      .setColor(flatShade, flatShade, flatShade, 255)
+                                      .setUv(v[i + 3], v[i + 4])
+                                      .setOverlay(OverlayTexture.NO_OVERLAY)
+                                      .setLight(FULLBRIGHT)
+                                      .setNormal(p, 0.0f, 1.0f, 0.0f);
+                                }
                             }
                         }
+                        LatteFrameStats.lambda(lt0, lverts);
                     });
             }
         }
@@ -152,14 +243,18 @@ public final class LatteWorldRenderer {
                 }
             }
         }
+        final long kt0 = LatteFrameStats.t();
         submitSkyBatches(pose, collector, skyFlatFrame, true);
         submitSkyBatches(pose, collector, skyFrame, false);
+        LatteFrameStats.sky(kt0);
 
         // the living things: every engine mobj as a DOOM billboard, in the same pose space
         // (sprites stay on the submit path in BOTH modes)
+        final long st0 = LatteFrameStats.t();
         LatteSprites.submit(pose, collector, LatteWorld.snap(), LatteWorld.mapRef(),
             LatteWorld.sprites(), cam.x, cam.z,
             LatteWorld.originX(), LatteWorld.originZ(), LatteWorld.cx(), LatteWorld.cy());
+        LatteFrameStats.sprites(st0);
 
         // the backdrop cylinder survives only as the fallback: with the sky pass live,
         // sky exists exactly where the map put sky surfaces, and nowhere else

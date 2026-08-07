@@ -98,12 +98,17 @@ public final class MarineBody {
         final int c;
         if (LatteWorld.insideLevel(state.x, state.y, state.z)) {
             final int sec = LatteWorld.map() != null ? LatteWorld.map().sectorAt(meDx, meDy) : -1;
-            c = LatteMesh.shadeByte(LatteWorld.lightOf(sec));
+            c = LatteMesh.doomShade(
+                Math.min(255, LatteWorld.lightOf(sec) + LatteWorld.extraLightBytes()),
+                Math.hypot(vdx, vdy), false);
         } else {
             c = 255;
         }
 
-        collector.submitCustomGeometry(pose, RenderTypes.entityCutout(idOf(key)),
+        // same pass as every other doom sprite: texture x doomShade, no lightmap
+        final var mt = SpriteShadePipeline.type(idOf(key));
+        collector.submitCustomGeometry(pose,
+            mt != null ? mt : RenderTypes.entityCutout(idOf(key)),
             (p, vc) -> {
                 vertex(vc, p, x0, yT, z0, u0, 0, c);
                 vertex(vc, p, x1, yT, z1, u1, 0, c);

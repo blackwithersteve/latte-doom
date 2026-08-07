@@ -9,11 +9,11 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * DOOM has no food: while transformed, the whole hunger system stands still — no natural
- * regeneration, no saturation top-ups, no
- * hunger drain, no starvation. Health moves ONLY through the DOOM lanes: engine damage
- * bills hearts, medikits/soulspheres heal them, the reborn refills them. Plain Steve
- * (off-roster) keeps vanilla hunger untouched.
+ * DOOM has no food, so while transformed the whole hunger system stands still: no natural
+ * regeneration, no saturation top-ups, no hunger drain and no starvation. Health moves
+ * only through the DOOM lanes, where engine damage bills hearts, medikits and soulspheres
+ * heal them, and the reborn refills them. An untransformed player keeps vanilla hunger
+ * untouched.
  */
 @Mixin(FoodData.class)
 public abstract class MarineFoodMixin {

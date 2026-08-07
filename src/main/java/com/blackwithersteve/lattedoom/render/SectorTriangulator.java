@@ -9,8 +9,8 @@ import java.util.Map;
  * GZDoom-style sector triangulation: each sector's floor/ceiling becomes polygons-with-holes,
  * triangulated directly from its linedef boundary loops by the vendored mapbox {@link Earcut}.
  * Walls are later built from the SAME linedef vertices these loops are made of, so floor rim
- * and wall base share vertices BY CONSTRUCTION — the class of hairline gaps that
- * BSP-fragment gluing produces cannot exist here. No BSP involvement; NODES can be garbage.
+ * and wall base share vertices by construction, so the class of random gaps that BSP-fragment
+ * gluing produces cannot exist here. No BSP involvement; NODES can be garbage.
  *
  * This class owns the DOOM-specific parts: (1) tracing boundary loops from directed linedef
  * edges (front side = v1->v2, back = v2->v1; interior on the RIGHT; self-referencing lines

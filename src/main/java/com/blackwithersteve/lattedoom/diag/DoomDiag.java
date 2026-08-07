@@ -3,7 +3,6 @@ package com.blackwithersteve.lattedoom.diag;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.Minecraft;
 
-import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -11,12 +10,13 @@ import java.nio.file.StandardOpenOption;
 import java.util.ArrayDeque;
 
 /**
- * The flight recorder. Every interesting lane records one compact line into
- * a ring buffer: player position each tick, the rider pin each frame, every glue snap,
- * every rideFloor carry, every setPos/teleport with its caller, every session flag flip.
+ * A flight recorder for the lanes that move the player. Each records one compact line
+ * into a ring buffer: player position each tick, the rider pin each frame, every glue
+ * snap, every rideFloor carry, every setPos and teleport with its caller, and every
+ * level-session flag change.
  *
- * When something ANOMALOUS happens — the player moves more than a block within a single
- * frame, more than four blocks within a tick, or changes dimension — the whole last ~2
+ * When something anomalous happens (the player moves more than a block within a single
+ * frame, more than four blocks within a tick, or changes dimension) the whole last two
  * seconds of the buffer is dumped to logs/lattedoom-diag.log with a marker naming the
  * trigger. One repro = the full story, in order, with timestamps. /doomdiag dumps
  * manually; recording is always on (cost is one formatted string per event).
@@ -51,7 +51,10 @@ public final class DoomDiag {
             final double t = (System.nanoTime() - epoch) / 1.0e9;
             Files.writeString(file, String.format("%10.4f %-6s %s%n", t, lane, msg),
                 StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
-        } catch (IOException ignored) {
+        } catch (Throwable ignored) {
+            // Recording must never take down its caller. Outside a launched Minecraft — the
+            // headless probes exercise Session, which logs here — FabricLoader has no game
+            // directory and throws something that is not an IOException.
         }
     }
 
@@ -131,7 +134,7 @@ public final class DoomDiag {
             Files.writeString(file, sb.toString(), StandardCharsets.UTF_8,
                 StandardOpenOption.CREATE, StandardOpenOption.APPEND);
             System.out.println("[lattedoom-diag] dumped: " + trigger);
-        } catch (IOException e) {
+        } catch (Throwable e) {
             System.err.println("[lattedoom-diag] dump failed: " + e);
         }
     }

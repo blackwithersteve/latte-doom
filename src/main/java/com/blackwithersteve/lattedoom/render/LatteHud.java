@@ -97,7 +97,11 @@ public final class LatteHud {
             final int lc = LatteWorld.levelLightCoords(
                 mc.player.getX(), mc.player.getY(), mc.player.getZ());
             if (lc >= 0) {
-                gunShade = LatteMesh.shadeByte((lc >> 4) * 255 / 15);
+                // the view weapon sits at arm's length: the lit curve at ~41 units,
+                // which is the software renderer's brightest scalelight rung
+                gunShade = LatteMesh.doomShade(
+                    Math.min(255, (lc >> 4) * 255 / 15 + LatteWorld.extraLightBytes()),
+                    41.0, false);
             }
         }
         // dead marines hold no gun: DOOM drops the view weapon away on death — while the
@@ -123,17 +127,12 @@ public final class LatteHud {
             case 1 -> minimalHud(g, snap, sprites, mc, guiW, guiH);
             default -> { } // size 2: nothing but the world
         }
-        // the engine's heads-up line, top left in the small font, ~4 seconds like HU
-        if (snap.message != null && !snap.message.equals(lastMessage)) {
-            lastMessage = snap.message;
-            messageUntil = System.currentTimeMillis() + 4000;
-        }
-        if (lastMessage != null && System.currentTimeMillis() < messageUntil && !automap) {
-            drawHudText(g, lastMessage.toUpperCase(java.util.Locale.ROOT),
-                edgeLeft(guiW, guiH) + 2, 2, guiW, guiH);
+        // messages arrive from the host's queue in the client tick, not from the snapshot
+        if (!automap) {
+            drawNotify(g, guiW, guiH);
         }
         if (!automap && !dead) {
-            crosshair(g, mc, guiW, guiH);
+            crosshair(g, snap, mc, guiW, guiH);
         }
         if (com.blackwithersteve.lattedoom.LatteDoomClient.levelStats()
             && LatteWorld.map() != null) {
@@ -142,34 +141,244 @@ public final class LatteHud {
         flashes(g, snap, guiW, guiH);
     }
 
-    /** Crispy Doom's crosshair: a small cross at the view center, optionally colored by
-     * health the way Crispy colors it (green, then yellow under 2/3, red under 1/3). */
-    private static void crosshair(GuiGraphicsExtractor g, Minecraft mc, int guiW, int guiH) {
-        final int mode = com.blackwithersteve.lattedoom.LatteDoomClient.crosshair();
-        if (mode == 0 || mc.player == null) {
+    /** The crosshair shapes, in place of UZDoom's XHAIR lumps. */
+    public static final String[] CROSSHAIR_NAMES =
+        {"OFF", "CROSS", "OPEN CROSS", "DOT", "ANGLE", "CIRCLE", "CHEVRON"};
+
+    /**
+     * The crosshair.
+     *
+     * UZDoom picks a graphic from XHAIRS/XHAIRB lumps that it ships itself — DOOM.WAD has
+     * none, so the shapes are drawn as geometry. Its BEHAVIOUR is reproduced: the size is
+     * crosshairscale times an INTEGER screen multiplier (base_sbar.cpp:143-150 uses
+     * max(height/720, 1), so 1080p gives 1 and not 1.5), the colour is lerped by health with
+     * the breakpoint at 85 rather than 100, and a pickup briefly grows it.
+     *
+     * DIVERGENCE, disclosed: UZDoom centres the crosshair on the VIEW WINDOW, so with the
+     * status bar up it sits at about 42% of screen height. Minecraft always renders the world
+     * full-screen and centred, so the view-window centre does not exist here and this stays
+     * at the screen centre.
+     */
+    private static void crosshair(GuiGraphicsExtractor g, WorldSnapshot snap, Minecraft mc,
+                                  int guiW, int guiH) {
+        final int style = com.blackwithersteve.lattedoom.LatteDoomClient.crosshair();
+        if (style <= 0 || mc.player == null) {
             return;
         }
         int color = 0xFFDADADA;
-        if (mode == 2) {
+        if (com.blackwithersteve.lattedoom.LatteDoomClient.crosshairHealth()) {
+            // base_sbar.cpp:177-182 — below 85 lerp red to green, above 100 green to blue,
+            // and between 86 and 100 the colour is pinned at full
             final int health = (int) Math.ceil(mc.player.getHealth() * 5.0f);
-            color = health > 66 ? 0xFF40C040 : health > 33 ? 0xFFD0C020 : 0xFFD03030;
+            if (health > 100) {
+                color = lerpColor(0xFF00FF00, 0xFF7F7FFF, Math.min(1.0, (health - 100) / 100.0));
+            } else if (health <= 85) {
+                color = lerpColor(0xFFFF0000, 0xFF00FF00, Math.max(0.0, health / 85.0));
+            } else {
+                color = 0xFF00FF00;
+            }
         }
+        // grow on pickup, decaying like UZDoom's 1/18-per-tic CrosshairSize
+        if (snap != null && snap.bonusCount > 0) {
+            growUntil = System.currentTimeMillis() + 300;
+        }
+        double grow = 1.0;
+        final long left = growUntil - System.currentTimeMillis();
+        if (left > 0) {
+            grow = 1.0 + 0.6 * (left / 300.0);
+        }
+
+        // Size in gui-scaled units directly. Minecraft's gui scale is already the thing that
+        // keeps interface elements a consistent physical size, so applying UZDoom's own
+        // screen-height multiplier on top of it and then dividing back out only collapsed
+        // the shapes into two or three integer pixels, where none of them can be told apart.
+        final double scale = com.blackwithersteve.lattedoom.LatteDoomClient.crosshairScale()
+            * grow;
         final int cx = guiW / 2, cy = guiH / 2;
-        g.fill(cx - 3, cy, cx + 4, cy + 1, color);
-        g.fill(cx, cy - 3, cx + 1, cy + 4, color);
+        final int r = Math.max(2, (int) Math.round(5 * scale));
+        final int t = Math.max(1, (int) Math.round(1.2 * scale));
+        // a bar of thickness t centred on the middle pixel, rather than hanging off it
+        final int o = -(t - 1) / 2;
+        // the hole in an open shape, always leaving arms at least two pixels long
+        final int gap = Math.max(1, Math.min(r - 2, r / 2));
+
+        switch (style) {
+            case 1 -> { // full cross
+                g.fill(cx - r, cy + o, cx + r + 1, cy + o + t, color);
+                g.fill(cx + o, cy - r, cx + o + t, cy + r + 1, color);
+            }
+            case 2 -> { // open cross: four arms with a hole in the middle
+                g.fill(cx - r, cy + o, cx - gap, cy + o + t, color);
+                g.fill(cx + gap + 1, cy + o, cx + r + 1, cy + o + t, color);
+                g.fill(cx + o, cy - r, cx + o + t, cy - gap, color);
+                g.fill(cx + o, cy + gap + 1, cx + o + t, cy + r + 1, color);
+            }
+            case 3 -> g.fill(cx + o, cy + o, cx + o + t, cy + o + t, color); // dot
+            case 4 -> { // angle brackets, opening left and right
+                g.fill(cx - r, cy - gap, cx - r + t, cy + gap + 1, color);
+                g.fill(cx - r, cy - gap, cx - gap, cy - gap + t, color);
+                g.fill(cx - r, cy + gap + 1 - t, cx - gap, cy + gap + 1, color);
+                g.fill(cx + r + 1 - t, cy - gap, cx + r + 1, cy + gap + 1, color);
+                g.fill(cx + gap + 1, cy - gap, cx + r + 1, cy - gap + t, color);
+                g.fill(cx + gap + 1, cy + gap + 1 - t, cx + r + 1, cy + gap + 1, color);
+            }
+            case 5 -> ring(g, cx, cy, r, t, color);
+            default -> { // chevron pointing up, its point on the centre
+                for (int i = 0; i <= r; i++) {
+                    g.fill(cx - i, cy - r + i, cx - i + t, cy - r + i + t, color);
+                    g.fill(cx + i, cy - r + i, cx + i + t, cy - r + i + t, color);
+                }
+            }
+        }
     }
+
+    /** An actual circle, plotted around the rim — the previous "circle" was a square ring. */
+    private static void ring(GuiGraphicsExtractor g, int cx, int cy, int radius, int t,
+                             int color) {
+        final int steps = Math.max(24, radius * 8);
+        for (int i = 0; i < steps; i++) {
+            final double a = i * Math.PI * 2.0 / steps;
+            final int px = cx + (int) Math.round(Math.cos(a) * radius);
+            final int py = cy + (int) Math.round(Math.sin(a) * radius);
+            g.fill(px, py, px + t, py + t, color);
+        }
+    }
+
+    private static long growUntil;
+
+    private static int lerpColor(int a, int b, double f) {
+        final double k = Math.max(0.0, Math.min(1.0, f));
+        final int ar = (a >> 16) & 0xFF, ag = (a >> 8) & 0xFF, ab = a & 0xFF;
+        final int br = (b >> 16) & 0xFF, bg = (b >> 8) & 0xFF, bb = b & 0xFF;
+        return 0xFF000000
+            | ((int) Math.round(ar + (br - ar) * k) << 16)
+            | ((int) Math.round(ag + (bg - ag) * k) << 8)
+            | (int) Math.round(ab + (bb - ab) * k);
+    }
+
+    /**
+     * The engine's heads-up lines, as a notify buffer rather than one line.
+     *
+     * DOOM prints pickups and key messages faster than a single 4-second slot can show, so
+     * earlier lines were being lost. This keeps a small stack like a source port's: four
+     * lines, three seconds each, the oldest dropping first, and an alpha fade over the last
+     * stretch instead of a hard disappearance.
+     */
+    /**
+     * Push an engine message onto the notify stack.
+     *
+     * A repeat of the line already on top does not add a row; it bumps a counter and
+     * refreshes the timer, and the row then reads "MESSAGE (x3)". UZDoom's notify buffer
+     * does the same thing, and without it picking up four shells in a row buries every
+     * other message.
+     */
+    public static void pushMessage(String msg) {
+        pushNotify(msg);
+    }
+
+    private static void pushNotify(String msg) {
+        if (msg == null || msg.isEmpty()
+            || !com.blackwithersteve.lattedoom.LatteDoomClient.showMessages()) {
+            return;
+        }
+        final String text = msg.toUpperCase(java.util.Locale.ROOT);
+        final long life = (long) (com.blackwithersteve.lattedoom.LatteDoomClient
+            .messageTime() * 1000);
+        if (!notify.isEmpty()) {
+            final Notice top = notify.get(notify.size() - 1);
+            if (top.text.equals(text)) {
+                top.repeats++;
+                top.until = System.currentTimeMillis() + life;
+                return;
+            }
+        }
+        notify.add(new Notice(text, System.currentTimeMillis() + life));
+        final int max = com.blackwithersteve.lattedoom.LatteDoomClient.messageLines();
+        while (notify.size() > max) {
+            notify.remove(0);
+        }
+    }
+
+    /**
+     * The message stack, top left, wrapped to the screen and faded out at the end of each
+     * line's life rather than vanishing.
+     */
+    private static void drawNotify(GuiGraphicsExtractor g, int guiW, int guiH) {
+        final long now = System.currentTimeMillis();
+        notify.removeIf(n -> now >= n.until);
+        if (notify.isEmpty()) {
+            return;
+        }
+        final double left = edgeLeft(guiW, guiH) + 2;
+        final double usable = (edgeRight(guiW, guiH) - 4) - left;
+        double y = 2;
+        for (Notice n : notify) {
+            final long remaining = n.until - now;
+            final int alpha = remaining >= NOTIFY_FADE_MS ? 255
+                : (int) Math.max(0, 255 * remaining / NOTIFY_FADE_MS);
+            final String text = n.repeats > 1 ? n.text + " (X" + n.repeats + ")" : n.text;
+            for (String line : wrap(text, usable)) {
+                drawHudTextTinted(g, line, left, y, guiW, guiH, (alpha << 24) | 0xFFFFFF);
+                y += fontHeight() + 1;
+            }
+        }
+    }
+
+    /** Break a line to fit the usable width, on spaces where possible. */
+    private static java.util.List<String> wrap(String text, double widthUnits) {
+        final java.util.List<String> out = new java.util.ArrayList<>();
+        if (widthUnits <= 0 || textWidth(text) <= widthUnits) {
+            out.add(text);
+            return out;
+        }
+        final StringBuilder line = new StringBuilder();
+        for (String word : text.split(" ")) {
+            final String candidate = line.isEmpty() ? word : line + " " + word;
+            if (textWidth(candidate) > widthUnits && !line.isEmpty()) {
+                out.add(line.toString());
+                line.setLength(0);
+                line.append(word);
+            } else {
+                line.setLength(0);
+                line.append(candidate);
+            }
+        }
+        if (!line.isEmpty()) {
+            out.add(line.toString());
+        }
+        return out;
+    }
+
+    private static final class Notice {
+        private final String text;
+        private long until;
+        private int repeats = 1;
+
+        Notice(String text, long until) {
+            this.text = text;
+            this.until = until;
+        }
+    }
+
+
+    private static final long NOTIFY_FADE_MS = 400;
+    private static final java.util.List<Notice> notify = new java.util.ArrayList<>();
 
     /** Crispy Doom's level stats: kills, items, secrets and the level time, top left,
      * in the WAD's small font. */
     private static void statsWidget(GuiGraphicsExtractor g, WorldSnapshot snap,
                                     int guiW, int guiH) {
-        final double left = edgeLeft(guiW, guiH);
-        drawHudText(g, String.format("K %d/%d  I %d/%d  S %d/%d",
+        // below the message stack, and on the HUD's scale like everything else on screen
+        final double left = edgeLeft(guiW, guiH) + 2;
+        final double top = 4 + (fontHeight() + 1)
+            * com.blackwithersteve.lattedoom.LatteDoomClient.messageLines();
+        final int line = fontHeight() + 2;
+        drawHudTextTinted(g, String.format("K %d/%d  I %d/%d  S %d/%d",
             snap.killCount, snap.totalKills, snap.itemCount, snap.totalItems,
-            snap.secretCount, snap.totalSecrets), left + 2, 12, guiW, guiH);
+            snap.secretCount, snap.totalSecrets), left, top, guiW, guiH, 0xFFFFFFFF);
         final int seconds = snap.levelTime / 35;
-        drawHudText(g, String.format("TIME %d:%02d", seconds / 60, seconds % 60),
-            left + 2, 22, guiW, guiH);
+        drawHudTextTinted(g, String.format("TIME %d:%02d", seconds / 60, seconds % 60),
+            left, top + line, guiW, guiH, 0xFFFFFFFF);
     }
 
     /**
@@ -177,64 +386,113 @@ public final class LatteHud {
      * health at the left edge, the ready weapon's ammo at the right, owned keys stacked
      * above it — all from the status bar's own art, nothing modern.
      */
+    /**
+     * fullscreenOffsets: a canvas coordinate anchored to the TRUE screen edge rather than to
+     * the 4:3 box, which is how a widescreen source port places a fullscreen HUD. A negative
+     * x measures in from the right edge, a negative y up from the bottom, exactly as
+     * UZDoom's DrawFullScreenStuff coordinates read.
+     */
+    private static double fsX(double x, int guiW, int guiH) {
+        return x >= 0 ? edgeLeft(guiW, guiH) + x : edgeRight(guiW, guiH) + x;
+    }
+
+    private static double fsY(double y, int guiH) {
+        return y >= 0 ? y : edgeBottom(guiH) + y;
+    }
+
+    /**
+     * The fullscreen HUD, following DOOM's own (doom_sbar.zs DrawFullScreenStuff) rather
+     * than UZDoom's AltHud — the AltHud needs two fonts that ship inside gzdoom.pk3, while
+     * this uses nothing but IWAD art and sits on the same 320x200 canvas as the status bar.
+     *
+     * Layout is UZDoom's, coordinate for coordinate: the medikit and health at the bottom
+     * left with armour stacked ABOVE it, the ready ammo bottom right, and the keys in the
+     * top right corner stacking downward. Numbers are three mono cells of STTNUM wide, so a
+     * three-digit value never reaches its icon.
+     */
     private static void minimalHud(GuiGraphicsExtractor g, WorldSnapshot snap,
                                    SpriteSet sprites, Minecraft mc, int guiW, int guiH) {
-        // widescreen: the readouts hug the TRUE screen edges, the way widescreen source
-        // ports place their fullscreen huds; on a 4:3 window the edges are 0 and 320 and
-        // nothing changes. Room for three digits everywhere, so 200% cannot reach an icon.
-        final double left = edgeLeft(guiW, guiH);
-        final double right = edgeRight(guiW, guiH);
         final int health = Math.min(200, (int) Math.ceil(mc.player.getHealth() * 5.0f));
-        // the medikit in front of health and the armor in front of armor, so the two
-        // numbers read at a glance — the WAD's own pickup sprites, scaled to the digits
-        icon(g, sprites, "MEDI", left + 2, 196, 13, guiW, guiH);
-        numRight(g, "sttnum", health, left + 74, 184, guiW, guiH);
-        patch(g, "sttprcnt", left + 74, 184, guiW, guiH);
-        icon(g, sprites, snap.armorType == 2 ? "ARM2" : "ARM1", left + 90, 196, 13,
+        final int cell = 14; // HUDFONT_DOOM's mono cell: the width of STTNUM0
+
+        // health, with berserk swapping the medikit for the strength sprite as UZDoom does
+        final boolean berserk = snap.berserk;
+        icon(g, sprites, berserk ? "PSTR" : "MEDI", fsX(20, guiW, guiH), fsY(-2, guiH), 16,
+            guiW, guiH, true);
+        numRight(g, "sttnum", health, fsX(44 + 3 * cell, guiW, guiH), fsY(-20, guiH),
             guiW, guiH);
-        numRight(g, "sttnum", snap.armor, left + 162, 184, guiW, guiH);
-        patch(g, "sttprcnt", left + 162, 184, guiW, guiH);
-        if (snap.readyAmmoType >= 0 && snap.readyAmmoType < 4 && snap.ammo != null) {
-            numRight(g, "sttnum", snap.ammo[snap.readyAmmoType], right - 4, 184,
-                guiW, guiH);
+
+        // armour sits ABOVE health, not beside it
+        if (snap.armor > 0) {
+            icon(g, sprites, snap.armorType == 2 ? "ARM2" : "ARM1",
+                fsX(20, guiW, guiH), fsY(-22, guiH), 16, guiW, guiH, true);
+            numRight(g, "sttnum", snap.armor, fsX(44 + 3 * cell, guiW, guiH),
+                fsY(-40, guiH), guiW, guiH);
         }
-        // keys in fixed slots above the ammo, blue/yellow/red top to bottom; a skull
-        // draws over its card the way the status bar's slots resolve them
+
+        // the ready weapon's ammo, bottom right: the icon CENTRED at -14 so it stays on
+        // screen, the number right-aligned at -30, to its left
+        if (snap.readyAmmoType >= 0 && snap.readyAmmoType < 4 && snap.ammo != null) {
+            icon(g, sprites, AMMO_SPRITES[snap.readyAmmoType], fsX(-14, guiW, guiH),
+                fsY(-4, guiH), 16, guiW, guiH, true);
+            numRight(g, "sttnum", snap.ammo[snap.readyAmmoType], fsX(-30, guiW, guiH),
+                fsY(-20, guiH), guiW, guiH);
+        }
+
+        // keys in the top right corner, stacking down, a skull drawn over its own card
         if (snap.cards != null) {
+            double keyY = 2;
             for (int k = 0; k < 3; k++) {
-                final int y = 150 + k * 10;
-                if (snap.cards[k]) {
-                    patch(g, "stkeys" + k, right - 12, y, guiW, guiH);
-                }
-                if (snap.cards[k + 3]) {
-                    patch(g, "stkeys" + (k + 3), right - 12, y, guiW, guiH);
+                final boolean card = snap.cards[k];
+                final boolean skull = snap.cards[k + 3];
+                if (card || skull) {
+                    patch(g, "stkeys" + (skull ? k + 3 : k), fsX(-10, guiW, guiH), keyY,
+                        guiW, guiH);
+                    keyY += 10;
                 }
             }
         }
     }
 
+    /** The pickup sprite standing for each ammo pool, for the fullscreen readout. */
+    private static final String[] AMMO_SPRITES = {"CLIP", "SHEL", "CELL", "ROCK"};
+
     /** The true left screen edge in canvas units (0 on a 4:3 window, negative on wider). */
     private static double edgeLeft(int guiW, int guiH) {
-        final double xs = guiH * (4.0 / 3.0) / 320.0;
-        return 160.0 - guiW / (2.0 * xs);
+        return 160.0 - guiW / (2.0 * hudXs(guiH));
     }
 
     private static double edgeRight(int guiW, int guiH) {
-        final double xs = guiH * (4.0 / 3.0) / 320.0;
-        return 160.0 + guiW / (2.0 * xs);
+        return 160.0 + guiW / (2.0 * hudXs(guiH));
+    }
+
+    /** The bottom screen edge in canvas units — 200 unscaled, further down when smaller. */
+    private static double edgeBottom(int guiH) {
+        return guiH / hudYs(guiH);
     }
 
     private static double frozenBobX, frozenBobY;
     private static double smoothBobAmp;
     private static long lastBobNanos;
-    private static String lastMessage;
-    private static long messageUntil;
 
     /** A world sprite as a small HUD icon: bottom-left anchored at canvas coords,
      * scaled to the given height. */
     private static void icon(GuiGraphicsExtractor g, SpriteSet sprites, String sprName,
                              double canvasX, double canvasBottomY, double targetH,
                              int guiW, int guiH) {
+        icon(g, sprites, sprName, canvasX, canvasBottomY, targetH, guiW, guiH, false);
+    }
+
+    /**
+     * A pickup sprite scaled to {@code targetH} canvas units tall.
+     *
+     * {@code centred} places the sprite's MIDDLE at canvasX rather than its left edge, which
+     * is what UZDoom's inventory-icon coordinates mean. Drawing a right-anchored icon from
+     * its left edge pushes it off the screen — that is what clipped the ammo readout.
+     */
+    private static void icon(GuiGraphicsExtractor g, SpriteSet sprites, String sprName,
+                             double canvasX, double canvasBottomY, double targetH,
+                             int guiW, int guiH, boolean centred) {
         if (sprites == null) {
             return;
         }
@@ -248,13 +506,28 @@ public final class LatteHud {
             return;
         }
         final double f = targetH / size[1];
-        final double xs = guiH * (4.0 / 3.0) / 320.0;
-        final double ys = guiH / 200.0;
-        final int x = (int) Math.round(guiW / 2.0 + (canvasX - 160.0) * xs);
+        final double xs = hudXs(guiH);
+        final double ys = hudYs(guiH);
+        final double drawX = centred ? canvasX - size[0] * f / 2.0 : canvasX;
+        final int x = (int) Math.round(guiW / 2.0 + (drawX - 160.0) * xs);
         final int y = (int) Math.round((canvasBottomY - targetH) * ys);
         g.blit(RenderPipelines.GUI_TEXTURED, idOf(key), x, y, 0.0f, 0.0f,
             (int) Math.round(size[0] * f * xs), (int) Math.round(targetH * ys),
             size[0], size[1], size[0], size[1]);
+    }
+
+    /**
+     * The HUD's own scale, on top of the canvas mapping. UZDoom keeps the status bar on a
+     * scale ladder separate from the menu's precisely because a bar is meant to grow with
+     * the screen while a settings page is not; this is that control.
+     */
+    static double hudXs(int guiH) {
+        return guiH * (4.0 / 3.0) / 320.0
+            * com.blackwithersteve.lattedoom.LatteDoomClient.hudScale();
+    }
+
+    static double hudYs(int guiH) {
+        return guiH / 200.0 * com.blackwithersteve.lattedoom.LatteDoomClient.hudScale();
     }
 
     // ------------------------------------------------------------------ the 1:1 STBAR
@@ -343,6 +616,9 @@ public final class LatteHud {
         } else if (snap.bonusCount > 0) {
             final int a = (int) (Math.min(1.0, snap.bonusCount / 24.0) * 0.35 * 255);
             g.fill(0, 0, guiW, guiH, (a << 24) | 0xD7BA45);
+        } else if (snap.radSuit) {
+            // ST_doPaletteStuff's RADIATIONPAL: the suit washes the screen green
+            g.fill(0, 0, guiW, guiH, 0x2E00C000);
         }
     }
 
@@ -351,7 +627,7 @@ public final class LatteHud {
      * menu. Silently no-ops if the lump wasn't in the WAD. */
     public static void drawGfx(GuiGraphicsExtractor g, String lump,
                                double canvasX, double canvasY, int guiW, int guiH) {
-        patch(g, lump, canvasX, canvasY, guiW, guiH);
+        patchPlain(g, lump, canvasX, canvasY, guiW, guiH); // menu art, not HUD-scaled
     }
 
     /** Is a menu/status patch registered (present in the loaded WAD)? */
@@ -379,15 +655,131 @@ public final class LatteHud {
                 x += 4;
                 continue;
             }
-            patch(g, lump, x, canvasY, guiW, guiH);
+            patchPlain(g, lump, x, canvasY, guiW, guiH); // shared with the menu's pages
             x += size[0] + 1;
         }
     }
 
+    /** {@link #drawHudText} with an ARGB tint multiplied into every glyph. */
+    public static void drawHudTextTinted(GuiGraphicsExtractor g, String text,
+                                         double canvasX, double canvasY, int guiW, int guiH,
+                                         int color) {
+        double x = canvasX;
+        for (int i = 0; i < text.length(); i++) {
+            final char c = Character.toUpperCase(text.charAt(i));
+            if (c == ' ') {
+                x += 4;
+                continue;
+            }
+            final String lump = String.format("stcfn%03d", (int) c);
+            final String key = "gfx/" + lump;
+            final int[] size = DoomRuntimeTextures.textureSize(key);
+            if (size == null) {
+                x += 4;
+                continue;
+            }
+            // the HUD's own scale, so the messages and the stats block track the status
+            // bar instead of staying put while everything around them resizes
+            final double xs = hudXs(guiH);
+            final double ys = hudYs(guiH);
+            final int px = (int) Math.round(guiW / 2.0 + (x - 160.0) * xs);
+            final int py = (int) Math.round(canvasY * ys);
+            g.blit(RenderPipelines.GUI_TEXTURED, idOf(key), px, py, 0.0f, 0.0f,
+                (int) Math.round(size[0] * xs), (int) Math.round(size[1] * ys),
+                size[0], size[1], size[0], size[1], color);
+            x += size[0] + 1;
+        }
+    }
+
+    /** Height of the WAD's small font, from the 'A' glyph. 0 when no WAD is loaded. */
+    public static int fontHeight() {
+        final int[] size = DoomRuntimeTextures.textureSize("gfx/stcfn065");
+        return size == null ? 0 : size[1];
+    }
+
+    /** Width this string occupies in the WAD's small font, in font pixels. */
+    public static int textWidth(String text) {
+        int w = 0;
+        for (int i = 0; i < text.length(); i++) {
+            final char c = Character.toUpperCase(text.charAt(i));
+            if (c == ' ') {
+                w += 4;
+                continue;
+            }
+            final int[] size = DoomRuntimeTextures.textureSize(
+                "gfx/" + String.format("stcfn%03d", (int) c));
+            w += size == null ? 4 : size[0] + 1;
+        }
+        return w;
+    }
+
+    /**
+     * A line of small-font text in REAL pixels at an integer scale, optionally tinted.
+     *
+     * This is the settings-menu path. Text there is laid out in screen pixels at an integer
+     * factor rather than on the 320x200 canvas, because a fractional factor resamples the
+     * glyph patches unevenly — which is what made the menu look wrong at high resolution.
+     * {@code color} is ARGB and multiplies the glyph; 0xFFFFFFFF leaves it alone.
+     */
+    public static void drawTextPx(GuiGraphicsExtractor g, String text, int px, int py,
+                                  int scale, int color) {
+        int x = px;
+        for (int i = 0; i < text.length(); i++) {
+            final char c = Character.toUpperCase(text.charAt(i));
+            if (c == ' ') {
+                x += 4 * scale;
+                continue;
+            }
+            final String lump = String.format("stcfn%03d", (int) c);
+            final String key = "gfx/" + lump;
+            final int[] size = DoomRuntimeTextures.textureSize(key);
+            if (size == null) {
+                x += 4 * scale;
+                continue;
+            }
+            g.blit(RenderPipelines.GUI_TEXTURED, idOf(key), x, py, 0.0f, 0.0f,
+                size[0] * scale, size[1] * scale, size[0], size[1], size[0], size[1], color);
+            x += (size[0] + 1) * scale;
+        }
+    }
+
+    /** A WAD graphic in REAL pixels at an integer scale, tinted. Offsets are applied, as
+     * V_DrawPatch does. */
+    public static void drawGfxPx(GuiGraphicsExtractor g, String lump, int px, int py,
+                                 int scale, int color) {
+        final String key = "gfx/" + lump;
+        final int[] size = DoomRuntimeTextures.textureSize(key);
+        if (size == null) {
+            return;
+        }
+        int x = px, y = py;
+        final int[] ofs = DoomRuntimeTextures.spriteOffset(key);
+        if (ofs != null) {
+            x -= ofs[0] * scale;
+            y -= ofs[1] * scale;
+        }
+        g.blit(RenderPipelines.GUI_TEXTURED, idOf(key), x, y, 0.0f, 0.0f,
+            size[0] * scale, size[1] * scale, size[0], size[1], size[0], size[1], color);
+    }
+
     /** Blit a status graphic at classic 320x200 canvas coords, V_DrawPatch semantics
      * (the patch's own left/top offsets are subtracted — the face lumps carry big ones). */
+    /** A HUD patch: goes through the HUD's own scale, so the status bar and the fullscreen
+     * readouts follow the HUD scale setting. */
     private static void patch(GuiGraphicsExtractor g, String lump,
                               double canvasX, double canvasY, int guiW, int guiH) {
+        patchAt(g, lump, canvasX, canvasY, guiW, guiH, hudXs(guiH), hudYs(guiH));
+    }
+
+    /** A patch at the plain canvas mapping, for callers outside the HUD (menu art). */
+    private static void patchPlain(GuiGraphicsExtractor g, String lump,
+                                   double canvasX, double canvasY, int guiW, int guiH) {
+        patchAt(g, lump, canvasX, canvasY, guiW, guiH,
+            guiH * (4.0 / 3.0) / 320.0, guiH / 200.0);
+    }
+
+    private static void patchAt(GuiGraphicsExtractor g, String lump, double canvasX,
+                                double canvasY, int guiW, int guiH, double xs, double ys) {
         final String key = "gfx/" + lump;
         final int[] size = DoomRuntimeTextures.textureSize(key);
         if (size == null) {
@@ -398,8 +790,6 @@ public final class LatteHud {
             canvasX -= ofs[0];
             canvasY -= ofs[1];
         }
-        final double xs = guiH * (4.0 / 3.0) / 320.0;
-        final double ys = guiH / 200.0;
         final int x = (int) Math.round(guiW / 2.0 + (canvasX - 160.0) * xs);
         final int y = (int) Math.round(canvasY * ys);
         g.blit(RenderPipelines.GUI_TEXTURED, idOf(key), x, y, 0.0f, 0.0f,

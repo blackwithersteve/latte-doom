@@ -22,6 +22,6 @@
   "logical_height": 384,
   "min_y": -64,
   "monster_spawn_block_light_limit": 0,
-  "monster_spawn_light_level": 15,
+  "monster_spawn_light_level": 0,
   "timelines": "#minecraft:in_end"
 }

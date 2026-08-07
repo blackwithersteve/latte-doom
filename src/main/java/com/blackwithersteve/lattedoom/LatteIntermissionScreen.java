@@ -12,12 +12,11 @@ import net.minecraft.network.chat.Component;
 import org.lwjgl.glfw.GLFW;
 
 /**
- * THE INTERMISSION, rendered natively in Minecraft from the WAD's own WI_* art — never
- * the engine framebuffer. Vanilla
- * wi_stuff.c behavior on the engine's own wminfo numbers: level name + FINISHED, then
- * KILLS / ITEMS / SECRET counting up with the pistol tick and the barexp when a stat
- * lands, TIME and PAR, then "ENTERING <next>". Every press is ALSO forwarded to the
- * engine (its own invisible WI is the authority on advancing to the next level); when
+ * The intermission, drawn in Minecraft from the WAD's own WI_* art. Vanilla wi_stuff.c
+ * behaviour on the engine's own wminfo numbers: level name and FINISHED, then KILLS,
+ * ITEMS and SECRET counting up with the pistol tick and the barexp when a stat lands,
+ * TIME and PAR, then "ENTERING &lt;next&gt;". Every press is also forwarded to the
+ * engine, whose own invisible WI stays the authority on advancing to the next level; when
  * the next map goes live this screen closes itself and the start-delivery places the
  * player on it. WIMAPx episode backgrounds where the WAD has them. The SOUNDS are the
  * engine WI's: it runs alongside this screen and plays the pistol tick / barexp /

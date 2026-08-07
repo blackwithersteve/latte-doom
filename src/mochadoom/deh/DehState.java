@@ -14,7 +14,7 @@ import p.ActiveStates;
 import rr.ISpriteManager;
 
 /**
- * Latte Doom additive patch — DEHACKED/BEX runtime table state (M-BOOM slice 7).
+ * Latte Doom additive patch — DEHACKED/BEX runtime table state.
  *
  * Mocha types its state machine with Java enums (statenum_t/spritenum_t/mobjtype_t),
  * which cannot grow at runtime. MBF-class DEH patches reference indices past the

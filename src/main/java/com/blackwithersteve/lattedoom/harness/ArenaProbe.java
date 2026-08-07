@@ -10,18 +10,20 @@ import java.nio.file.Path;
 import java.util.List;
 
 /**
- * OVERWORLD ARENA — stage A0 proof (headless). Generates the flat arena PWAD with an imp
- * in it, boots the REAL engine on it (overriding E1M1), and verifies the imp SPAWNS and
- * THINKS. If this passes, the engine can host real DOOM monsters on a generated map — the
- * whole overworld-arena plan is viable. If not, we found out for the price of one probe.
+ * Headless check that the engine can host monsters on a generated map. Builds a flat
+ * arena PWAD holding one imp, boots the engine on it in place of E1M1, and verifies the
+ * imp both spawns and runs its think routine.
  *
- * Run: gradlew arenaProbe
+ * Run: gradlew arenaProbe -Pwad=&lt;absolute path to an IWAD&gt;
  */
 public final class ArenaProbe {
 
     public static void main(String[] args) throws Exception {
-        final Path iwad = Path.of(args.length > 0 ? args[0]
-            : "DOOM.WAD");
+        if (args.length < 1) {
+            System.err.println("ArenaProbe: pass an IWAD path (-Pwad=<path>)");
+            System.exit(2);
+        }
+        final Path iwad = Path.of(args[0]);
         final Path dir = Path.of("run-arena");
         Files.createDirectories(dir);
 
@@ -72,7 +74,7 @@ public final class ArenaProbe {
         final int id = snap.mId[imp0], f0 = snap.mFrame[imp0];
         System.out.printf("[arena] imp spawned at (%.0f, %.0f), frame=%d%n", x0, y0, f0);
 
-        // let the AI run, then see if the imp moved or animated toward the player
+        // let the thinkers run, then see if the imp moved or animated toward the player
         Thread.sleep(4000);
         final WorldSnapshot s2 = host.worldSnapshot();
         int imp1 = -1;

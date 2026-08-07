@@ -18,22 +18,21 @@ import java.util.Map;
  * marine. Pure translation: sprite + frame + angle come from the engine; we pick the view
  * with DOOM's own 8-rotation formula (r_things.c: rot = (viewerToThing - thingAngle +
  * 202.5°)/45°), anchor with the patch's left/top offsets, and light it with the sector's
- * live light (FF_FULLBRIGHT overrides). Widths are squeezed by 1/1.2 (the art was drawn
- * for the 1.2 vertical CRT stretch; heights stay true 1px = 1 map unit).
- * Cylindrical billboarding: quads face the camera horizontally.
+ * live light (FF_FULLBRIGHT overrides). Widths are squeezed by 1/1.2, because the art was
+ * drawn for the 1.2 vertical CRT stretch and heights stay true at 1px = 1 map unit.
+ * Billboarding is cylindrical: quads face the camera horizontally.
  */
 public final class LatteSprites {
 
     private static final int FULLBRIGHT = 0xF000F0;
     private static final double UNITS = LatteWorld.UNITS;
-    // Aspect rule: DOOM's art was drawn
-    // on 320x200 shown at 4:3, i.e. CRT pixels 1.2x TALLER than wide. Keeping HEIGHT true
-    // (1px = 1 unit — correct against walls and collision height) therefore requires
-    // squeezing WIDTH by 1/1.2 to preserve the drawn proportions; width-true "fixed" the
-    // hitbox mismatch but makes every sprite visibly too wide. The collision box
-    // poking past the art is GENUINE vanilla (a pinky's box is 60u wide vs ~44u of art —
-    // demons are meant to block corridors); the earlier "twice as thick" was that original
-    // behavior, not a rendering bug. So: the height-true rule stands.
+    // Aspect rule. DOOM's art was drawn on 320x200 shown at 4:3, so CRT pixels are 1.2x
+    // taller than wide. Height is kept true (1px = 1 unit, which is correct against walls
+    // and collision height), so width must be squeezed by 1/1.2 to preserve the drawn
+    // proportions. Do not make width true instead: it matches the hitbox but renders every
+    // demon too wide. The collision box poking past the art is vanilla behaviour, since a
+    // pinky's box is 60 units against roughly 44 units of art, and demons are meant to
+    // block corridors.
     private static final double HSQUEEZE = 1.0 / 1.2;
     private static final double VSTRETCH = 1.0;
     private static final int FF_FRAMEMASK = 0x7FFF;
@@ -108,7 +107,7 @@ public final class LatteSprites {
             LatteWorld.thingDrawn(snap, i, drawn);
             final double mx = drawn[0], my = drawn[1], mz = drawn[2];
             final double vdx = mx - camDx, vdy = my - camDy;
-            final double dist = Math.hypot(vdx, vdy);
+            final double dist = Math.sqrt(vdx * vdx + vdy * vdy);
             if (dist < 1.0e-3) {
                 continue; // camera inside the thing
             }
@@ -133,8 +132,8 @@ public final class LatteSprites {
 
             // billboard axes: the VIEWER'S RIGHT = view direction rotated -90° in doom's
             // CCW y-up plane = (vdy, -vdx). The +90° rotation points screen-LEFT and
-            // mirrors every sprite horizontally (rotation frames flip left-for-right —
-            // the art's right edge lands on the viewer's left).
+            // mirrors every sprite horizontally (the "I see his left-front from his
+            // right-front" bug — art right edge landing on the viewer's left).
             final double rxD = vdy / dist, ryD = -vdx / dist;
             // doom -> mesh-local (the pose is already origin-translated): X=(x-cx)/32, Z=(cy-y)/32
             final float rx = (float) (rxD / UNITS), rz = (float) (-ryD / UNITS);
@@ -144,7 +143,10 @@ public final class LatteSprites {
             final float x0 = (float) (bxc + rx * l0), z0 = (float) (bzc + rz * l0);
             final float x1 = (float) (bxc + rx * l1), z1 = (float) (bzc + rz * l1);
 
-            final int sec = map != null ? map.sectorAt(mx, my) : -1;
+            // engine-true sector from the snapshot — the old per-thing sectorAt() was
+            // a FULL LINEDEF SCAN per mobj per frame (~13ms of every MAP10 frame)
+            final int sec = snap.mSector != null && i < snap.mSector.length
+                ? snap.mSector[i] : map != null ? map.sectorAt(mx, my) : -1;
             // Smart sprite clip (the GZDoom fix): some art extends below its origin; the 1993
             // software renderer CLIPPED those pixels at the floor, but in true 3D they sink in.
             // Grounded things get lifted so feet touch the floor (capped — deliberate deep
@@ -164,9 +166,13 @@ public final class LatteSprites {
 
             final float u0 = view.flip() ? 1 : 0, u1 = view.flip() ? 0 : 1;
             final boolean bright = (snap.mFrame[i] & FF_FULLBRIGHT_BIT) != 0;
-            final int light = bright ? 255
-                : (sec >= 0 && sec < snap.light.length ? snap.light[sec] : 255);
-            final float shade = LatteMesh.shadeByte(light) / 255.0f;
+            final int light = Math.min(255,
+                (sec >= 0 && sec < snap.light.length ? snap.light[sec] : 255)
+                + snap.extraLight * 16);
+            final float shade = LatteMesh.doomShade(light, dist, bright) / 255.0f;
+            if (bright && LatteFrameStats.on) {
+                noteBright(sprName, shade, light, dist); // /stats-gated diagnostic
+            }
 
             batches.computeIfAbsent(idOf(key), k -> new ArrayList<>()).add(new float[]{
                 x0, yTop, z0, u0, x1, yBot, z1, u1, shade});
@@ -174,7 +180,10 @@ public final class LatteSprites {
 
         for (Map.Entry<Identifier, List<float[]>> e : batches.entrySet()) {
             final List<float[]> quads = e.getValue();
-            collector.submitCustomGeometry(pose, RenderTypes.entityCutout(e.getKey()),
+            // our own pass: texture x doomShade, no vanilla lightmap/entity terms
+            final var st = SpriteShadePipeline.type(e.getKey());
+            collector.submitCustomGeometry(pose,
+                st != null ? st : RenderTypes.entityCutout(e.getKey()),
                 (p, vc) -> {
                     for (float[] q : quads) {
                         final int c = (int) (q[8] * 255.0f);
@@ -202,6 +211,23 @@ public final class LatteSprites {
         // the same safe name DoomRuntimeTextures registered
         return IDS.computeIfAbsent(DoomRuntimeTextures.safe(key),
             k -> Identifier.fromNamespaceAndPath("lattedoom", "textures/doom/" + k + ".png"));
+    }
+
+    /** Throttled fullbright diagnostic (only while /stats is on): logs the SHADE a
+     * bright sprite is actually submitted with, per sprite name every 3s. If the
+     * log says 255 while the screen shows a dim sprite, the loss is downstream of
+     * our math (the vanilla entity shader's lightmap multiply is the suspect). */
+    private static final Map<String, Long> BRIGHT_LOGGED = new HashMap<>();
+
+    private static void noteBright(String spr, float shade, int light, double dist) {
+        final long now = System.currentTimeMillis();
+        final Long last = BRIGHT_LOGGED.get(spr);
+        if (last != null && now - last < 3000) {
+            return;
+        }
+        BRIGHT_LOGGED.put(spr, now);
+        System.out.printf("[lattedoom bright] %s shade=%d (light=%d dist=%.0f)%n",
+            spr, (int) (shade * 255.0f), light, dist);
     }
 
     private LatteSprites() {}

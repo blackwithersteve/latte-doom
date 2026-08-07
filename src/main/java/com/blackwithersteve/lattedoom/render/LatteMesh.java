@@ -12,8 +12,7 @@ import java.util.function.Function;
  * walls as ONE quad per surface sharing the same linedef vertices the flat loops are made
  * of — so floor rim and wall base meet bit-exactly. No 64u grid splitting, no per-repeat
  * wall cuts: every registered texture carries a REPEAT sampler, so UVs tile on the GPU
- * (that is also why this mesh stays an order of magnitude lighter than a
- * block-per-texel build).
+ * (which is also why this mesh is an order of magnitude lighter than a per-repeat cut one).
  *
  * Texture pegging is re-derived from the vendored engine's own renderer
  * (rr/RendererState.java, the r_segs.c port — texturemid = the world height where texture
@@ -68,29 +67,91 @@ public final class LatteMesh {
 
     public static void setGamma(int level) {
         gammaLevel = Math.max(0, Math.min(v.tables.GammaTables.LUT.length - 1, level));
+        // the lit path carries gamma as a pow() exponent in the vertex alpha
+        // fit the LUT's curve at its midpoint
+        final double mid = v.tables.GammaTables.LUT[gammaLevel][128] / 255.0;
+        final double exp = Math.log(Math.max(mid, 1e-3)) / Math.log(128.0 / 255.0);
+        gammaAlpha = (int) Math.round(Math.max(0.05, Math.min(1.0, exp)) / 4.0 * 255.0);
     }
 
     public static int gamma() {
         return gammaLevel;
     }
 
-    /** A flat raise of every sector's light, in whole DOOM light notches of 16.
-     * Distinct from gamma, which curves. */
+    /** A flat raise of every sector's light, in DOOM light units. Distinct from gamma,
+     * which curves the result instead of shifting it. */
     private static volatile int lightBoost;
 
-    public static void setLightBoost(int notches) {
-        lightBoost = Math.max(0, Math.min(4, notches));
+    public static void setLightBoost(int units) {
+        lightBoost = Math.max(0, Math.min(128, units));
     }
 
     public static int lightBoost() {
         return lightBoost;
     }
 
+    /** The software light chain per pixel instead of the flat per-sector shade. Read at
+     * submit time, so toggling is instant and needs no rebake. */
+    private static volatile boolean doomLight = true;
+
+    public static void setDoomLight(boolean on) {
+        if (doomLight != on) {
+            doomLight = on;
+            // the persistent buffers bake a per-mode encoding: rebuild them
+            LatteSectorBuffers.dispose();
+        }
+    }
+
+    public static boolean doomLight() {
+        return doomLight;
+    }
+
+    /** Diagnostic: the lit pipeline with constant inputs (full light, no contrast,
+     * neutral gamma), so the shader provably outputs the unmodified texture. This
+     * separates bad light data on real overdrawn geometry from the shader's structure
+     * faulting the driver. Toggled by /doomlight's third position. */
+    private static volatile boolean debugFlatLight;
+
+    public static void setDebugFlatLight(boolean on) {
+        debugFlatLight = on;
+    }
+
+    public static boolean debugFlatLight() {
+        return debugFlatLight;
+    }
+
+    /** Gamma packed for the lit path's vertex alpha: pow exponent / 4. */
+    private static volatile int gammaAlpha = 64;
+
+    public static int gammaAlpha() {
+        return gammaAlpha;
+    }
+
+    /** The lit-path shade for a sprite at a distance in DOOM units: the same banded
+     * colormap curve the world shader runs, with LUT-exact gamma, so things sit in the
+     * light of the room around them. Fullbright frames, meaning muzzle flashes, explosions
+     * and plasma, take colormap zero exactly as R_DrawVissprite picks. Falls back to the
+     * flat shade while doom light is off. */
+    public static int doomShade(int light, double distUnits, boolean fullbright) {
+        if (!doomLight) {
+            return shadeByte(fullbright ? 255 : light);
+        }
+        int index = 0;
+        if (!fullbright) {
+            final int l = Math.max(0, Math.min(255, light + lightBoost));
+            final int lightnum = l >> 4;
+            index = Math.max(0, Math.min(31,
+                (15 - lightnum) * 4 - (int) (1280.0 / Math.max(1.0, distUnits))));
+        }
+        final int base = Math.round(255f * (32 - index) / 32f);
+        return v.tables.GammaTables.LUT[gammaLevel][base];
+    }
+
     /** The 0..255 grey for a sector light level (DOOM's own 24..255 clamp + boost + gamma). */
     public static int shadeByte(int light) {
         // 32 per step: 16 read as barely-there in play, and the slider's whole span
         // must be an unmistakable difference (top = a 128 sector at full bright)
-        final int base = Math.max(24, Math.min(255, light + lightBoost * 32));
+        final int base = Math.max(24, Math.min(255, light + lightBoost));
         return v.tables.GammaTables.LUT[gammaLevel][base];
     }
 

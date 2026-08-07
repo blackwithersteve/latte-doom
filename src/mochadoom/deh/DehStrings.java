@@ -4,7 +4,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * Latte Doom additive patch — DEHACKED/BEX string overrides (M-BOOM slice 7).
+ * Latte Doom additive patch — DEHACKED/BEX string overrides.
  *
  * Runtime side of BEX [STRINGS]. Most of mocha's text lives in englsh.java as
  * static final String CONSTANTS which javac inlines at every use site — those can

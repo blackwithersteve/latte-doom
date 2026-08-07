@@ -4,6 +4,10 @@ run/
 run2/
 run-smoke/
 run-arena/
+run-tnt/
+frames/
+*.dsg
+*.cfg
 .idea/
 *.iml
 .vscode/

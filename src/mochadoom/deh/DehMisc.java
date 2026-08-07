@@ -1,7 +1,7 @@
 package deh;
 
 /**
- * Latte Doom additive patch — DEHACKED Misc values (M-BOOM slice 7).
+ * Latte Doom additive patch — DEHACKED Misc values.
  *
  * The Misc block's globals. Only the entries with a clean runtime-variable site in
  * mocha are live (consulted from marked patch sites); the rest are parsed and

@@ -36,9 +36,9 @@ public final class LatteDoomScreen extends Screen {
      * secrets, par time, "entering...") and closes ITSELF the moment the next level starts —
      * the level-advance delivery then places the player at the new map's start. */
     private final boolean autoIntermission;
-    /** In-level "menu only" view (the boot key must never dump the player into playing
-     * flat-screen DOOM — the WORLD is the renderer): opens with the engine's own Esc menu
-     * already up, and closes itself once the player backs out of the menu. */
+    /** In-level menu-only view: opens with the engine's own Esc menu already up and closes
+     * itself once the player backs out of it. The boot key must never leave the player
+     * playing flat-screen DOOM, because the world is the renderer. */
     private final boolean menuOnly;
     private int escReleaseIn;   // synthetic Esc key-up countdown (held across a tic boundary)
     private int menuCloseGrace; // ticks !menuactive must persist before self-close (lets a
@@ -115,10 +115,10 @@ public final class LatteDoomScreen extends Screen {
     public void removed() {
         GLFW.glfwSetInputMode(Minecraft.getInstance().getWindow().handle(),
             GLFW.GLFW_CURSOR, GLFW.GLFW_CURSOR_NORMAL);
-        // The world never auto-freezes — closing the screen just returns you to
-        // Minecraft while the level keeps living around you. Only the explicit
-        // /doomwatch pauses the engine. But do
-        // release any keys DOOM still thinks are held, or the marine walks forever.
+        // The world never auto-freezes: closing the screen returns the player to Minecraft
+        // while the level keeps running around them, and only the explicit /doomwatch
+        // pauses the engine. Any keys DOOM still believes are held must be released here,
+        // or the marine walks forever.
         if (host != null) {
             host.cancelKeys();
         }

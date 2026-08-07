@@ -88,7 +88,7 @@ public class LatteDoomClient implements ClientModInitializer {
             {"/doomwatch", "freeze or resume the engine"},
             {"/doomscreen", "the engine's own framebuffer"},
             {"/doomdiag", "write the diagnostic log"},
-            {"/cull, /persist, /bsp", "renderer toggles"},
+            {"/cull, /bsp", "renderer toggles"},
         };
         src.sendFeedback(Component.literal(advanced
             ? "§6Latte Doom§r advanced commands:"
@@ -175,6 +175,8 @@ public class LatteDoomClient implements ClientModInitializer {
     }
     private static DoomHost host;
     private static boolean capsWasDown;
+    private static boolean bootHintShown;
+    private static int bootHintTicks;
     private static int tickCount;
 
     /** This client's own engine (the marine suit / the world when we own it), or null. */
@@ -226,7 +228,10 @@ public class LatteDoomClient implements ClientModInitializer {
         if (config == null) {
             config = LatteDoomConfig.load(FabricLoader.getInstance().getConfigDir());
         }
-        client.gui.setScreen(new LatteVolumeScreen(config));
+        // Opened standalone (keybind, bare /doomvolume), so closing it returns to the
+        // game rather than to a parent page.
+        client.gui.setScreen(new com.blackwithersteve.lattedoom.menu.LatteMenu(
+            null, com.blackwithersteve.lattedoom.menu.Pages.volume()));
     }
 
     static void diagCmd(String cmd) {
@@ -919,7 +924,11 @@ public class LatteDoomClient implements ClientModInitializer {
         doom.englsh.GAMMALVL0, doom.englsh.GAMMALVL1, doom.englsh.GAMMALVL2,
         doom.englsh.GAMMALVL3, doom.englsh.GAMMALVL4};
 
-    private static void setGamma(int level) {
+    public static int gamma() {
+        return com.blackwithersteve.lattedoom.render.LatteMesh.gamma();
+    }
+
+    public static void setGamma(int level) {
         final int lvl = Math.max(0, Math.min(4, level));
         com.blackwithersteve.lattedoom.render.LatteMesh.setGamma(lvl);
         if (config != null) {
@@ -954,9 +963,155 @@ public class LatteDoomClient implements ClientModInitializer {
         return config != null ? config.crosshair : 0;
     }
 
-    public static void setCrosshair(int mode) {
+    /** 0 = off, else the crosshair shape (LatteHud.CROSSHAIR_NAMES). */
+    public static void setCrosshair(int style) {
         if (config != null) {
-            config.crosshair = Math.max(0, Math.min(2, mode));
+            config.crosshair = Math.max(0,
+                Math.min(com.blackwithersteve.lattedoom.render.LatteHud.CROSSHAIR_NAMES.length - 1,
+                    style));
+            config.save();
+        }
+    }
+
+    /** Whether engine messages appear at all — UZDoom's show_messages. */
+    public static boolean showMessages() {
+        return config == null || config.showMessages;
+    }
+
+    public static void setShowMessages(boolean on) {
+        if (config != null) {
+            config.showMessages = on;
+            config.save();
+        }
+    }
+
+    /** How long a message stays up, UZDoom's con_notifytime. */
+    public static double messageTime() {
+        return config == null ? 3.0 : config.messageTime;
+    }
+
+    public static void setMessageTime(double seconds) {
+        if (config != null) {
+            config.messageTime = Math.max(1.0, Math.min(10.0, seconds));
+            config.save();
+        }
+    }
+
+    /** How many messages stack, UZDoom's con_notifylines. */
+    public static int messageLines() {
+        return config == null ? 4 : config.messageLines;
+    }
+
+    public static void setMessageLines(int lines) {
+        if (config != null) {
+            config.messageLines = Math.max(1, Math.min(8, lines));
+            config.save();
+        }
+    }
+
+    /** The status bar and fullscreen readouts' own scale, UZDoom's hud_scalefactor. */
+    public static double hudScale() {
+        return config == null ? 1.0 : config.hudScale;
+    }
+
+    public static void setHudScale(double s) {
+        if (config != null) {
+            config.hudScale = Math.max(0.4, Math.min(2.0, s));
+            config.save();
+        }
+    }
+
+    /** Size multiplier, on top of the integer screen multiplier UZDoom applies. */
+    public static double crosshairScale() {
+        return config == null ? 1.0 : config.crosshairScale;
+    }
+
+    public static void setCrosshairScale(double s) {
+        if (config != null) {
+            config.crosshairScale = Math.max(0.2, Math.min(4.0, s));
+            config.save();
+        }
+    }
+
+    /** Colour the crosshair by health, as UZDoom's crosshaircolors does. */
+    public static boolean crosshairHealth() {
+        return config != null && config.crosshairHealth;
+    }
+
+    public static void setCrosshairHealth(boolean on) {
+        if (config != null) {
+            config.crosshairHealth = on;
+            config.save();
+        }
+    }
+
+    // Settings that were persisted but had no menu row until the UZDoom port.
+
+    /** Mouse turns but does not walk you forward, the way source ports offer it. */
+    public static boolean novert() {
+        return config == null || config.novert;
+    }
+
+    public static void setNovert(boolean on) {
+        if (config != null) {
+            config.novert = on;
+            config.save();
+        }
+    }
+
+    /** Whether opening the DOOM menu freezes the engine in singleplayer. */
+    public static boolean pauseMinecraft() {
+        return config == null || config.pauseMinecraft;
+    }
+
+    public static void setPauseMinecraft(boolean on) {
+        if (config != null) {
+            config.pauseMinecraft = on;
+            config.save();
+        }
+    }
+
+    /** Whether Minecraft blocks may be placed inside a level. */
+    public static boolean placeBlocks() {
+        return config == null || config.placeBlocks;
+    }
+
+    public static void setPlaceBlocks(boolean on) {
+        if (config != null) {
+            config.placeBlocks = on;
+            config.save();
+        }
+    }
+
+    /** Minecraft melee damage against engine monsters, as a percentage of the default. */
+    public static int meleeScalePercent() {
+        return config == null ? 100 : (int) Math.round(config.meleeScale / 18.0 * 100.0);
+    }
+
+    public static void setMeleeScalePercent(int percent) {
+        if (config != null) {
+            config.meleeScale = Math.max(25, Math.min(400, percent)) / 100.0 * 18.0;
+            config.save();
+        }
+    }
+
+    /** The experimental BSP-truth mesh. Applied at the next level load. */
+    public static boolean bspMesh() {
+        return com.blackwithersteve.lattedoom.render.LatteMesh.bspMode();
+    }
+
+    public static void setBspMesh(boolean on) {
+        com.blackwithersteve.lattedoom.render.LatteMesh.setBspMode(on);
+        if (config != null) {
+            config.bspMesh = on;
+            config.save();
+        }
+    }
+
+    /** The skill every warp and suit boot runs on, settable outside New Game. */
+    public static void setDoomSkill(int skill) {
+        if (config != null) {
+            config.doomSkill = Math.max(1, Math.min(5, skill));
             config.save();
         }
     }
@@ -998,8 +1153,9 @@ public class LatteDoomClient implements ClientModInitializer {
         return com.blackwithersteve.lattedoom.render.LatteMesh.lightBoost();
     }
 
-    public static void setLightBoost(int notches) {
-        final int n = Math.max(0, Math.min(4, notches));
+    /** DOOM light units added to every sector, 0-128. */
+    public static void setLightBoost(int units) {
+        final int n = Math.max(0, Math.min(128, units));
         com.blackwithersteve.lattedoom.render.LatteMesh.setLightBoost(n);
         if (config != null && config.lightBoost != n) {
             config.lightBoost = n;
@@ -1008,9 +1164,9 @@ public class LatteDoomClient implements ClientModInitializer {
     }
 
 
-    /** Leaving a world takes DOOM with it: the engine, the raised level and the
-     * transformed state must not leak into the next world (a fresh world would
-     * otherwise open with the DOOM HUD up and a level already standing). */
+    /** Leaving a world takes DOOM with it: the engine, the raised level and the marine
+     * form must not leak into the next world ("I made a new world and spawned with the
+     * marine HUD and a level I never asked for"). */
     public static void resetOnDisconnect() {
         if (host != null) {
             // Await the unwind rather than firing terminate() and moving on. The engine runs
@@ -1148,12 +1304,31 @@ public class LatteDoomClient implements ClientModInitializer {
         com.blackwithersteve.lattedoom.render.LatteMesh.setGamma(config.gamma);
         com.blackwithersteve.lattedoom.render.LatteMesh.setLightBoost(config.lightBoost);
         com.blackwithersteve.lattedoom.render.LatteMesh.setBspMode(config.bspMesh);
+        com.blackwithersteve.lattedoom.render.LatteMesh.setDoomLight(config.doomLight);
 
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             // alt-tabbing must not pause the world (the DOOM engine keeps running anyway;
             // a paused MC against a live engine is the worst of both)
             if (client.options.pauseOnLostFocus) {
                 client.options.pauseOnLostFocus = false;
+            }
+            // FIRST-BOOT GUIDANCE, once per game launch: a few seconds into the first
+            // world, say what to do — nobody should need the log to find the M key or
+            // the WAD folder. Skipped when a session is already running.
+            if (!bootHintShown && client.player != null && client.gui.screen() == null) {
+                if (++bootHintTicks >= 60) {
+                    bootHintShown = true;
+                    if (!haveWad()) {
+                        client.player.sendSystemMessage(Component.literal(
+                            "§6Latte Doom§r has no game data yet. Put your §eDOOM.WAD§r or"
+                            + " §eDOOM2.WAD§r in " + config.dataDir
+                            + ", then press §eM§r for the DOOM menu."));
+                    } else if (host == null
+                        && !com.blackwithersteve.lattedoom.render.LatteWorld.warpedIn()) {
+                        client.player.sendOverlayMessage(Component.literal(
+                            "Press M for the DOOM menu."));
+                    }
+                }
             }
             // MARINE FORM keyboard law: Caps Lock toggles DOOM always-run (shift = hold-to-
             // run), and the Minecraft inventory does not exist — E closes itself.
@@ -1210,8 +1385,7 @@ public class LatteDoomClient implements ClientModInitializer {
                     && ssp.getPlayerCount() <= 1
                     && !com.blackwithersteve.lattedoom.render.LatteWorld.worldIsRemoteNow(client)
                     && (scr instanceof net.minecraft.client.gui.screens.PauseScreen
-                        || scr instanceof LatteMenuScreen
-                        || scr instanceof LatteVolumeScreen);
+                        || scr instanceof com.blackwithersteve.lattedoom.menu.LatteMenu);
                 if (wantPause && !host.isFrozen()) {
                     host.setFrozen(true);
                     pausedByScreen = true;
@@ -1264,12 +1438,20 @@ public class LatteDoomClient implements ClientModInitializer {
                 }
             }
             if (com.blackwithersteve.lattedoom.render.DoomAutomap.active()) {
-                // vanilla zoom: keypad +/- (layout-safe), 1.02x per tic while held
+                // Zoom was on the KEYPAD only, so on any keyboard without one the map
+                // could not be zoomed at all. The main-row +/- keys work everywhere and
+                // are free while the map is up (they step the interface size otherwise).
                 final long win = client.getWindow().handle();
-                if (GLFW.glfwGetKey(win, GLFW.GLFW_KEY_KP_ADD) == GLFW.GLFW_PRESS) {
+                final boolean zoomIn =
+                    GLFW.glfwGetKey(win, GLFW.GLFW_KEY_KP_ADD) == GLFW.GLFW_PRESS
+                    || GLFW.glfwGetKey(win, GLFW.GLFW_KEY_EQUAL) == GLFW.GLFW_PRESS;
+                final boolean zoomOut =
+                    GLFW.glfwGetKey(win, GLFW.GLFW_KEY_KP_SUBTRACT) == GLFW.GLFW_PRESS
+                    || GLFW.glfwGetKey(win, GLFW.GLFW_KEY_MINUS) == GLFW.GLFW_PRESS;
+                if (zoomIn) {
                     com.blackwithersteve.lattedoom.render.DoomAutomap.zoom(true);
                 }
-                if (GLFW.glfwGetKey(win, GLFW.GLFW_KEY_KP_SUBTRACT) == GLFW.GLFW_PRESS) {
+                if (zoomOut) {
                     com.blackwithersteve.lattedoom.render.DoomAutomap.zoom(false);
                 }
                 if (com.blackwithersteve.lattedoom.render.LatteWorld.map() == null
@@ -1302,9 +1484,9 @@ public class LatteDoomClient implements ClientModInitializer {
                 // (the suit's music keeps playing: it runs the shared map's track).
                 final boolean spectating =
                     com.blackwithersteve.lattedoom.render.LatteWorld.worldIsRemoteNow(client);
-                // suit-only boots stay quiet on music: the overworld must not run level
-                // music — the level's track plays when you're actually in a level
-                // session (warped in, or spectating a shared world)
+                // Suit-only boots stay silent: the level's track plays only when the
+                // player is in a level session, warped in or spectating a shared world.
+                // Without this the overworld plays level music with no level present.
                 final boolean musicOn =
                     com.blackwithersteve.lattedoom.render.LatteWorld.musicShouldPlay(client);
                 host.setVolumes(
@@ -1314,11 +1496,12 @@ public class LatteDoomClient implements ClientModInitializer {
                 // set unconditionally (it used to go stale outside the level)
                 host.setMarineMode(com.blackwithersteve.lattedoom.render.LatteWorld.marineForm());
                 host.setScavengeSprites(PickupConfig.consumableSprites());
-                // the software view renders ONLY for the debug framebuffer screen — the
-                // Minecraft world is the renderer (frees the engine thread = steady 35Hz)
+                // The software view renders only for the debug framebuffer screen: the
+                // Minecraft world is the renderer, which frees the engine thread to hold
+                // a steady 35Hz.
                 host.setViewRender(client.gui.screen() instanceof LatteDoomScreen);
             }
-            // apply a per-instance window title when one is configured
+            // Optional window title, so a second instance is distinguishable from the first
             if (tickCount++ % 40 == 0) {
                 final String title = System.getProperty("lattedoom.title");
                 if (title != null) {
@@ -1350,25 +1533,9 @@ public class LatteDoomClient implements ClientModInitializer {
                     setCull(false);
                     return Command.SINGLE_SUCCESS;
                 })));
-            // /persist [on|off] — EXPERIMENTAL S2: draw the level from persistent GPU buffers
-            // (bake-once) instead of re-emitting every vertex every frame. Default OFF (the
-            // proven renderer). Toggle it to test the big perf change without risking the game.
-            dispatcher.register(ClientCommands.literal("persist")
-                .executes(ctx -> {
-                    setPersist(!com.blackwithersteve.lattedoom.render.LatteSectorBuffers.ENABLED);
-                    return Command.SINGLE_SUCCESS;
-                })
-                .then(ClientCommands.literal("on").executes(ctx -> {
-                    setPersist(true);
-                    return Command.SINGLE_SUCCESS;
-                }))
-                .then(ClientCommands.literal("off").executes(ctx -> {
-                    setPersist(false);
-                    return Command.SINGLE_SUCCESS;
-                })));
-            // Seamless loading — /load alone must be enough:
+            // Loading commands. /load alone is enough for any file the folder holds:
             //   /load                  list the folder, classified
-            //   /load <file>           game, patch WAD or .deh — the set assembles itself
+            //   /load <file>           game, patch WAD or .deh; the set assembles itself
             //   /pwad <wads...|none>   stack extras explicitly (never required)
             //   /warp <map>            go to a map (e1m1 / map07), optional nomonsters
             // Starting a game properly = the DOOM menu (M): New Game -> episode -> skill.
@@ -1460,6 +1627,51 @@ public class LatteDoomClient implements ClientModInitializer {
                     + (config.bspMesh ? "on" : "off") + " \u00a77(next level load)\u00a7r"));
                 return Command.SINGLE_SUCCESS;
             }));
+            // /doomlight — the four-state cycle on -> debug-flat -> depth view ->
+            // off -> on, decided on the FULL flag triple so labels can never
+            // desync from the pixels (the first version stranded debug flags)
+            dispatcher.register(ClientCommands.literal("doomlight").executes(ctx -> {
+                if (config == null) {
+                    config = LatteDoomConfig.load(FabricLoader.getInstance().getConfigDir());
+                }
+                final boolean on = com.blackwithersteve.lattedoom.render.LatteMesh.doomLight();
+                final boolean flat = com.blackwithersteve.lattedoom.render.LatteMesh.debugFlatLight();
+                final boolean depth = com.blackwithersteve.lattedoom.render.WorldLightPipeline.depthDebug;
+                final String mode;
+                if (on && !flat && !depth) {
+                    com.blackwithersteve.lattedoom.render.LatteMesh.setDebugFlatLight(true);
+                    mode = "debug-flat (lit pipeline, constant light)";
+                } else if (on && flat && !depth) {
+                    com.blackwithersteve.lattedoom.render.LatteMesh.setDebugFlatLight(false);
+                    com.blackwithersteve.lattedoom.render.WorldLightPipeline.depthDebug = true;
+                    mode = "depth view (grey = distance the shader sees)";
+                } else if (on) {
+                    // depth or any mixed state: off, EVERY debug flag cleared
+                    com.blackwithersteve.lattedoom.render.LatteMesh.setDebugFlatLight(false);
+                    com.blackwithersteve.lattedoom.render.WorldLightPipeline.depthDebug = false;
+                    com.blackwithersteve.lattedoom.render.LatteMesh.setDoomLight(false);
+                    config.doomLight = false;
+                    config.save();
+                    mode = "off";
+                } else {
+                    com.blackwithersteve.lattedoom.render.LatteMesh.setDebugFlatLight(false);
+                    com.blackwithersteve.lattedoom.render.WorldLightPipeline.depthDebug = false;
+                    com.blackwithersteve.lattedoom.render.LatteMesh.setDoomLight(true);
+                    config.doomLight = true;
+                    config.save();
+                    mode = "on";
+                }
+                ctx.getSource().sendFeedback(Component.literal("§6doom light:§f " + mode));
+                return Command.SINGLE_SUCCESS;
+            }));
+            // /stats: rolling frame-cost line
+            dispatcher.register(ClientCommands.literal("stats").executes(ctx -> {
+                final boolean on = !com.blackwithersteve.lattedoom.render.LatteFrameStats.on;
+                com.blackwithersteve.lattedoom.render.LatteFrameStats.on = on;
+                ctx.getSource().sendFeedback(Component.literal("§6frame stats:§f "
+                    + (on ? "on (line every 200 frames)" : "off")));
+                return Command.SINGLE_SUCCESS;
+            }));
             // /doomdiag — flush the flight recorder to logs/lattedoom-diag.log right now
             dispatcher.register(ClientCommands.literal("doomdiag").executes(ctx -> {
                 com.blackwithersteve.lattedoom.diag.DoomDiag.dump("manual /doomdiag");
@@ -1488,10 +1700,10 @@ public class LatteDoomClient implements ClientModInitializer {
             dispatcher.register(ClientCommands.literal("doommarine").executes(ctx -> {
                 final Minecraft client = Minecraft.getInstance();
                 client.execute(() -> {
-                    // INSIDE a level the command toggles the form — an untransformed
-                    // player on a DOOM map is allowed. The overworld side stays closed:
-                    // no manual transform, no engine booted for suit play (delivery
-                    // transforms, leaving reverts; the rest comes later).
+                    // Inside a level the command toggles the form, because playing a DOOM
+                    // map untransformed is allowed. The overworld side stays closed: no
+                    // manual transform and no engine booted for it, since the delivery
+                    // transforms the player and leaving reverts them.
                     if (!com.blackwithersteve.lattedoom.render.LatteWorld.playMode()) {
                         ctx.getSource().sendFeedback(Component.literal(
                             "Marine form is automatic: start a game from the DOOM menu."));
@@ -1667,7 +1879,7 @@ public class LatteDoomClient implements ClientModInitializer {
             if (host != null) {
                 // AWAIT the old engine's teardown before booting the next: bare terminate() is
                 // async, so the previous level's audio was still playing when the new engine
-                // started (the previous level's monsters stayed audible).
+                // started (the "I still hear the last level's monsters" leak).
                 host.terminateAndAwait(1500);
                 host = null;
             }
@@ -1721,13 +1933,13 @@ public class LatteDoomClient implements ClientModInitializer {
         return bootKey != null && bootKey.matches(event);
     }
 
-    /** Open the DOOM MENU — the NATIVE one, rendered in Minecraft from the WAD's own art.
-     * The engine
-     * framebuffer never appears: outside a level the TITLEPIC backs the menu, inside the
-     * world dims behind it; New Game -> episode -> skill materializes the level around
-     * you. (The raw framebuffer screen survives only as /doomscreen for debugging.) */
+    /** Open the DOOM menu, drawn in Minecraft from the WAD's own art. The engine
+     * framebuffer never appears: outside a level the TITLEPIC backs the menu, inside one
+     * the world dims behind it, and New Game, episode and skill materialise the level
+     * around the player. The raw framebuffer screen survives only as /doomscreen for
+     * debugging. */
     public static void openDoom(Minecraft client) {
-        if (client.gui.screen() instanceof LatteMenuScreen) {
+        if (client.gui.screen() instanceof com.blackwithersteve.lattedoom.menu.LatteMenu) {
             return;
         }
         if (config == null) {
@@ -1735,7 +1947,12 @@ public class LatteDoomClient implements ClientModInitializer {
         }
         // menu art from the player's own WAD, loadable even before any level stood
         com.blackwithersteve.lattedoom.render.LatteWorld.ensureUiAssets(client, config.iwadPath);
-        client.gui.setScreen(new LatteMenuScreen());
+        // With no game data there is nothing behind any other page: open ON the picker,
+        // the way a source port's launcher asks for an IWAD first.
+        client.gui.setScreen(new com.blackwithersteve.lattedoom.menu.LatteMenu(null,
+            hasGameData()
+                ? com.blackwithersteve.lattedoom.menu.Pages.main()
+                : com.blackwithersteve.lattedoom.menu.Pages.wads()));
     }
 
     /** The -warp number for a suit engine: the shared map if we're spectating one
@@ -1765,20 +1982,6 @@ public class LatteDoomClient implements ClientModInitializer {
         }
     }
 
-    private static void setPersist(boolean on) {
-        final Minecraft c = Minecraft.getInstance();
-        c.execute(() -> { // GPU-buffer create/dispose must run on the render thread
-            com.blackwithersteve.lattedoom.render.LatteSectorBuffers.ENABLED = on;
-            if (!on) {
-                com.blackwithersteve.lattedoom.render.LatteSectorBuffers.dispose();
-            }
-            if (c.player != null) {
-                c.player.sendSystemMessage(Component.literal(
-                    "§6Latte Doom§r persistent geometry "
-                    + (on ? "§aON§r §7(experimental)§r" : "§7OFF§r")));
-            }
-        });
-    }
 
     private static DoomHost bootHost(Minecraft client, List<String> extraArgs) {
         return bootHost(client, extraArgs, -1);

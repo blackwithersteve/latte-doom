@@ -4,13 +4,13 @@ import com.blackwithersteve.lattedoom.engine.WorldSnapshot;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 
 /**
- * DOOM's automap, drawn NATIVE over the Minecraft HUD — no flat engine screen. The
- * classic look, rebuilt from the
- * same DoomMap the level mesh uses, with vanilla am_map.c rules:
- *  - only lines the ENGINE's own renderer has seen (ML_MAPPED, via the snapshot) draw;
- *    the Computer Area Map power adds the unseen rest in gray;
- *  - one-sided and SECRET lines red, floor-change lines brown, ceiling-change yellow,
- *    ML_DONTDRAW hidden — heights compared LIVE (doors/lifts change color as they move);
+ * DOOM's automap, drawn over the Minecraft HUD rather than as a flat engine screen. It is
+ * rebuilt from the same DoomMap the level mesh uses, under vanilla am_map.c rules:
+ *  - only lines the engine's own renderer has seen (ML_MAPPED, via the snapshot) draw,
+ *    and the Computer Area Map power adds the unseen rest in grey;
+ *  - one-sided and secret lines red, floor-change lines brown, ceiling-change yellow and
+ *    ML_DONTDRAW hidden, with heights compared live so doors and lifts change colour as
+ *    they move;
  *  - the white player arrow (the original 7-segment shape), north-up, follow mode;
  *  - black field down to the status bar, STBAR drawn on top, like 1993.
  * Zoom with keypad +/- (vanilla's 1.02x per tic). Toggled by the rebindable automap key.
@@ -47,11 +47,27 @@ public final class DoomAutomap {
 
     private static double minScale;
 
+    /** One zoom step. Vanilla's M_ZOOMIN is per 35Hz tic; this runs on the 20Hz client
+     * tick, so the step is larger to reach the same feel — a held key crosses the whole
+     * range in about two seconds instead of ten. */
     public static void zoom(boolean in) {
+        zoomBy(in ? 1.06 : 1.0 / 1.06);
+    }
+
+    /** A wheel notch, worth several held-key steps. */
+    public static void zoomNotch(double direction) {
+        zoomBy(direction > 0 ? 1.35 : 1.0 / 1.35);
+    }
+
+    private static void zoomBy(double factor) {
         if (scale > 0) {
-            scale *= in ? 1.02 : 1.0 / 1.02; // vanilla M_ZOOMIN / M_ZOOMOUT per tic
+            scale *= factor;
             if (minScale > 0 && scale < minScale) {
                 scale = minScale; // the whole map is in view; further out is just haze
+            }
+            // and a ceiling, or a held key walks off into a single corridor wall
+            if (minScale > 0 && scale > minScale * 24.0) {
+                scale = minScale * 24.0;
             }
         }
     }

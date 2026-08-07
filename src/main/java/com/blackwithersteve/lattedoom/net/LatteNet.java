@@ -1145,15 +1145,18 @@ public final class LatteNet {
                 com.blackwithersteve.lattedoom.render.LatteWorld.setRemoteLevel(
                     payload.map(), payload.ox(), payload.oy(), payload.oz(), payload.owner());
             } else {
-                com.blackwithersteve.lattedoom.render.LatteWorld.clearRemoteLevel();
-                // GUESTS standing in the shared level's dimension come back to the overworld.
-                // The OWNER ignores their own level-down here: their engine's quit callback
-                // handles their return, and a /load reboot (down then straight back up) must
-                // NOT bounce them out of the void and in again.
+                // The OWNER ignores their own level-down ENTIRELY: their local teardown
+                // already handled state, and this echo lands ticks later — running
+                // clearRemoteLevel here cleared warpedIn out from under an in-flight
+                // recovery or delivery (one of the level-finish ejection races).
                 final var self = context.client().player;
-                if (self == null || !payload.owner().equals(self.getUUID())) {
-                    com.blackwithersteve.lattedoom.render.LatteWorld.leaveLevelDim(context.client());
+                if (self != null && payload.owner().equals(self.getUUID())) {
+                    return;
                 }
+                com.blackwithersteve.lattedoom.render.LatteWorld.clearRemoteLevel();
+                // GUESTS standing in the shared level's dimension come back to the
+                // overworld.
+                com.blackwithersteve.lattedoom.render.LatteWorld.leaveLevelDim(context.client());
             }
         });
         ClientPlayNetworking.registerGlobalReceiver(SnapS2C.TYPE, (payload, context) ->

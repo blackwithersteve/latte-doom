@@ -7,7 +7,7 @@ import java.util.Map;
 import p.mobj_t;
 
 /**
- * Latte Doom additive patch — DEHACKED/BEX static data (M-BOOM slice 7).
+ * Latte Doom additive patch — DEHACKED/BEX static data.
  *
  * MBF's table extensions (states 967..1075, mobjinfo 137..143, sprites 138..143)
  * mechanically extracted from MBF-family source (Nugget Doom's info.c, which keeps

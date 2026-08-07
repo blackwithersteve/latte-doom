@@ -18,14 +18,14 @@ import java.util.Map;
 import java.util.Random;
 
 /**
- * THE COMBAT TRANSLATION LAYER: the DOOM engine owns the trigger, the state machine
- * and the ammo —
- * this class watches the SUIT's own discharges (ammo drops, melee swing frames) and
- * fires the equivalent MINECRAFT ray at the same moment: vanilla DOOM ranges, spreads
- * and damage dice, against MC entities (mobs AND other players — co-op friendly fire is
- * a DOOM tradition). Hits ship to the server (HitC2S) so guests work like the host, and
- * arrive attributed to the shooter (mobs aggro back). Engine things stay the engine's
- * business — an imp is shot by the ENGINE's hitscan, a creeper by this translator.
+ * Translates the marine's own fire into Minecraft damage. The engine owns the trigger,
+ * the state machine and the ammo; this class watches the transformed player's discharges
+ * (ammo drops and melee swing frames) and fires the equivalent Minecraft ray at the same
+ * moment, using vanilla DOOM ranges, spreads and damage dice against Minecraft entities.
+ * Other players are included, so co-op friendly fire behaves as DOOM's does. Hits ship to
+ * the server (HitC2S) so guests behave like the host, and arrive attributed to the
+ * shooter so mobs aggro back. Engine things stay the engine's business: an imp is shot by
+ * the engine's hitscan, a creeper by this translator.
  *
  * v1 scope: hitscan weapons (fist, pistol, shotgun, chaingun, chainsaw). Rockets,
  * plasma and BFG fly as engine projectiles — their MC-side blast is a later step.

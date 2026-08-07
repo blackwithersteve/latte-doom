@@ -40,6 +40,10 @@ public final class SkyPipeline {
                     .withLocation("pipeline/lattedoom_sky")
                     .withVertexShader(Identifier.fromNamespaceAndPath("lattedoom", "core/sky"))
                     .withFragmentShader(Identifier.fromNamespaceAndPath("lattedoom", "core/sky"))
+                    // the setup binds the overlay sampler: declare its layout like
+                    // vanilla ENTITY_CUTOUT (the world-light pipeline corrupted
+                    // draws without it; this one was only saved by tiny batch counts)
+                    .withBindGroupLayout(net.minecraft.client.renderer.BindGroupLayouts.SAMPLER1)
                     .withCull(false)
                     .build());
             flatPipeline = RenderPipelines.register(
@@ -48,6 +52,7 @@ public final class SkyPipeline {
                     .withVertexShader(Identifier.fromNamespaceAndPath("lattedoom", "core/sky"))
                     .withFragmentShader(Identifier.fromNamespaceAndPath("lattedoom", "core/sky"))
                     .withShaderDefine("SKY_FAR")
+                    .withBindGroupLayout(net.minecraft.client.renderer.BindGroupLayouts.SAMPLER1)
                     .withCull(false)
                     // rendered at the far plane and never a depth author: the planes
                     // must lose to every real surface and claim nothing

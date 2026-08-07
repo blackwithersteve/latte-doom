@@ -1,5 +1,75 @@
 # Changelog
 
+## [0.60.0-alpha] - 2026-08-07
+
+### Added
+
+- DOOM's light chain: sector light in sixteen bands, distance diminishing on the colormap
+  curve, and fake contrast.
+- Sprites, other marines and the view weapon light on the same curve.
+- Extra light from the gun flash and DEHACKED flash frames.
+- Options pages: Display, HUD, Sound, Messages, Mouse, Gameplay, Miscellaneous and Credits.
+- Menu rows for seven settings that had no interface.
+- Sliders with numeric readouts and real ranges.
+- A gamma slider.
+- A separate HUD scale.
+- Six crosshair shapes, with size and health colouring.
+- Heads up messages.
+- The radiation suit's screen tint.
+- A Read This page.
+- Automap zoom on the main keyboard row.
+- Boot guidance on the first world, naming the folder when no WAD is present.
+- Headless verification tasks for the session state machine and message delivery.
+
+### Changed
+
+- The map builds at load instead of over the first frames.
+- Light resolves at draw time, so boost, gamma and the light toggle act without rebuilding
+  geometry.
+- Fullbright frames hold colormap zero.
+- The menu is rebuilt around declarative pages and a navigation stack.
+- Settings pages scale on an aspect clamped to 17:10, so ultrawide no longer gets an
+  oversized interface.
+- Art pages keep the 320x200 canvas and its aspect correction.
+- Drawing and mouse hit testing share one layout.
+- The fullscreen HUD follows DOOM's own layout.
+- Berserk shows the strength sprite.
+- Light boost is now 0 to 128, and existing settings are migrated.
+- Volume sliders read 0.00 to 1.00.
+- Weapon switching resolves the selection directly instead of synthesising keypresses.
+- Slot keys toggle both halves of a weapon pair.
+- The world snapshot and the engine stage publish in a single write.
+- The Credits page is rewritten.
+
+### Fixed
+
+- The menu was pushed off screen in windows narrower than 4:3.
+- The crosshair did not scale with the display.
+- Heads up messages never appeared.
+- The ammo readout was drawn half off the right edge.
+- Level stats and messages ignored the HUD scale.
+- Weapon switching dropped input for three ticks after every switch.
+- The chainsaw could not be switched back to the fist.
+- The super shotgun was selectable in games without it.
+- Light boost stopped at 4.
+- A level exit could read as a level standing with no snapshot.
+- The player could be dropped at the start of the level they were already in.
+- Automap zoom stepped at the wrong rate and had no upper bound.
+- The savegame verification task passed when run without a WAD.
+
+### Removed
+
+- The per-frame render path and its command.
+
+### Known issues
+
+- Menu and HUD text is drawn in the WAD's single red font, so row colours are not visible.
+- There is no alternative HUD layout.
+- Invulnerability's screen inversion is missing.
+- The BSP mesh is experimental and reachable by `/bsp` only.
+- The crosshair is centred on the screen, not the view window.
+- The menu has no key rebinding, text entry or tooltips.
+
 ## [0.50.0-alpha] - 2026-07-31
 
 ### Added

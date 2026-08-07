@@ -4,7 +4,7 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * Latte Doom additive patch — DEHACKED/BEX parser (M-BOOM slice 7).
+ * Latte Doom additive patch — DEHACKED/BEX parser.
  *
  * Text-format DEHACKED (v2.3+ text patches, "Patch format = 5/6") plus the BEX
  * extensions Boom/MBF wads ship ([CODEPTR], [STRINGS], [PARS]). Binary .deh

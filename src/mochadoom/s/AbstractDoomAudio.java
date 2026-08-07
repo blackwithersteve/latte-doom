@@ -286,9 +286,9 @@ public class AbstractDoomAudio implements IDoomSound{
 			sep = NORM_SEP;
 		}
 
-		// Latte Doom patch: random per-sound pitch variation removed. Every sfx
-		// plays at its deterministic base pitch assigned
-		// above (NORM_PITCH, or sfx.pitch for linked sounds), like vanilla DOOM's default.
+		// Latte Doom patch: random per-sound pitch variation removed. Every sfx plays at
+		// the deterministic base pitch assigned above (NORM_PITCH, or sfx.pitch for linked
+		// sounds), matching vanilla DOOM's default.
 
 		// kill old sound
 		StopSound(origin);

@@ -20,18 +20,19 @@ import deh.DehState;
  *
  * Feed it a .deh/.bex text file or a .wad (every DEHACKED lump inside is used, in
  * order). It parses, applies against the real static tables (things/frames/codeptr/
- * sprites — the game-instance homes are skipped), and prints the counts. Exits 0 and
+ * sprites; the game-instance homes are skipped) and prints the counts. Exits 0 and
  * prints "DEH PROBE OK" when parsing produced zero problems.
  *
- * Default target: Eviternity's DEHACKED, the M-BOOM slice 7 acceptance wad.
+ * Run: gradlew dehProbe -Pwad=&lt;absolute path to a .deh, .bex or .wad&gt;
  */
 public final class DehProbe {
 
-    private static final String DEFAULT_WAD =
-        "Eviternity.wad";
-
     public static void main(String[] args) throws IOException {
-        final Path path = Path.of(args.length > 0 ? args[0] : DEFAULT_WAD);
+        if (args.length < 1) {
+            System.err.println("DehProbe: pass a .deh, .bex or .wad path (-Pwad=<path>)");
+            System.exit(2);
+        }
+        final Path path = Path.of(args[0]);
         if (!Files.exists(path)) {
             System.err.println("DehProbe: no such file: " + path);
             System.exit(2);

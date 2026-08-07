@@ -9,11 +9,11 @@ import net.minecraft.network.chat.Component;
 import org.lwjgl.glfw.GLFW;
 
 /**
- * A transformed player's death, DOOM's way: no "You Died!" text, no buttons.
- * The world stays visible (Minecraft's own death camera keels over — the fallen view),
- * DOOM's red death fade rolls in like the software renderer's damage palettes, and FIRE
- * or USE rises you again — the respawn feeds the map-restart lane: the level restarts
- * fresh and you're reborn at its start with fist + pistol. No death message reaches chat
+ * The marine's death screen, following DOOM rather than Minecraft: no death text and no
+ * buttons. The world stays visible under Minecraft's own death camera, DOOM's red death
+ * fade rolls in as the software renderer's damage palettes do, and FIRE or USE rises the
+ * player again. The respawn feeds the map-restart lane: the level restarts fresh and the
+ * player is reborn at its start with fist and pistol. No death message reaches chat
  * (MarineDeathMixin) and the marine's inventory never scatters.
  */
 public final class DoomDeathScreen extends Screen {

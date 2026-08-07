@@ -47,6 +47,10 @@ public final class WorldSnapshot {
     // and whether the Computer Area Map power is running (reveals the rest in gray) ----
     public boolean[] lineMapped;
     public boolean allmap;
+    /** Berserk is active — the fullscreen HUD shows the strength sprite instead of a medikit. */
+    public boolean berserk;
+    /** The radiation suit is active — vanilla washes the screen green while it runs. */
+    public boolean radSuit;
 
     /** Lines whose FRONT side textures differ from the level's baseline — pressed
      * switches (SW1->SW2) and anything else that edits sidedefs. The client swaps the
@@ -69,6 +73,11 @@ public final class WorldSnapshot {
      * when the level has no pushers — the client's untouched path. */
     public double playerPushX, playerPushY;
 
+    /** The console player's extralight (A_Light0/1/2 — gun flashes, and DEH
+     * flashlight weapons that loop those pointers). Vanilla adds it to every
+     * lightnum: walls, planes, sprites AND psprites all brighten. */
+    public int extraLight;
+
     // ---- mobjs (monsters, items, projectiles, decorations, AND the player) ----
     public int mobjCount;
     public double[] mx, my, mz;
@@ -86,6 +95,9 @@ public final class WorldSnapshot {
     public boolean[] mShootable;
     /** Collision radius, map units (the blockmap box rule uses radius sums). */
     public double[] mRadius;
+    /** ENGINE-TRUE containing sector (mobj.subsector.sector.id), or -1. Renderers
+     * use this instead of re-deriving point-in-sector geometry per thing per frame. */
+    public int[] mSector;
 
     // ---- the player's view weapon (psprites[0]) + muzzle flash (psprites[1]) ----
     /** spritenum ordinal (-1 = none), frame (FF_FULLBRIGHT kept), sx/sy in 320x200 pixels. */
@@ -172,6 +184,13 @@ public final class WorldSnapshot {
     /** Call when a NEW engine boots (DoomHost): the first capture mints a fresh epoch. */
     public static void newBoot() {
         epochKey = Integer.MIN_VALUE;
+    }
+
+    /** A snapshot carrying nothing but a level identity, for the headless session gate. */
+    public static WorldSnapshot forEpoch(long epoch) {
+        final WorldSnapshot s = new WorldSnapshot();
+        s.levelEpoch = epoch;
+        return s;
     }
 
     public static WorldSnapshot capture(DoomMain<?, ?> d) {
@@ -347,10 +366,10 @@ public final class WorldSnapshot {
             s.playerPushY = pushY / FRAC;
         }
 
-        // Switch textures: pressed buttons must visibly change — diff the sides' texture
-        // numbers against the level baseline — presses AND reusable-button reverts both
-        // fall out of the diff automatically. Engine thread only; baseline re-seeds per
-        // level instance (levelstarttic covers death-restarts of the same map).
+        // Switch textures: diff the sides' texture numbers against the level baseline, so
+        // presses and reusable-button reverts both fall out of the diff without being
+        // tracked separately. Engine thread only; the baseline re-seeds per level instance
+        // (levelstarttic covers death-restarts of the same map).
         final int levelKey = (d.gameepisode << 24) ^ (d.gamemap << 16) ^ d.levelstarttic;
         if (levelKey != epochKey) {
             epochKey = levelKey;
@@ -416,6 +435,14 @@ public final class WorldSnapshot {
         }
         s.allmap = p.powers != null && p.powers.length > data.Defines.pw_allmap
             && p.powers[data.Defines.pw_allmap] > 0;
+        // berserk: the fullscreen HUD swaps the medikit for the strength sprite, as
+        // DrawFullScreenStuff does
+        s.berserk = p.powers != null && p.powers.length > data.Defines.pw_strength
+            && p.powers[data.Defines.pw_strength] > 0;
+        // the radiation suit's green wash is one of vanilla's palette shifts, alongside
+        // the damage reds and pickup golds (ST_doPaletteStuff)
+        s.radSuit = p.powers != null && p.powers.length > data.Defines.pw_ironfeet
+            && p.powers[data.Defines.pw_ironfeet] > 0;
 
         // Walk the thinker ring once to count, once to fill — allocation-exact, no lists.
         // MF_NOSECTOR things are invisible MARKERS, not world objects: vanilla's renderer
@@ -431,6 +458,7 @@ public final class WorldSnapshot {
                 count++;
             }
         }
+        s.extraLight = p.extralight;
         s.mobjCount = count;
         s.mx = new double[count];
         s.my = new double[count];
@@ -442,6 +470,7 @@ public final class WorldSnapshot {
         s.mSolid = new boolean[count];
         s.mShootable = new boolean[count];
         s.mRadius = new double[count];
+        s.mSector = new int[count];
         int i = 0;
         for (thinker_t t = cap.next; t != cap && i < count; t = t.next) {
             if (t instanceof mobj_t m && m.mobj_sprite != null
@@ -460,6 +489,8 @@ public final class WorldSnapshot {
                 s.mSolid[i] = (m.flags & mobj_t.MF_SOLID) != 0;
                 s.mShootable[i] = (m.flags & mobj_t.MF_SHOOTABLE) != 0;
                 s.mRadius[i] = m.radius / FRAC;
+                s.mSector[i] = m.subsector != null && m.subsector.sector != null
+                    ? m.subsector.sector.id : -1;
                 i++;
             }
         }

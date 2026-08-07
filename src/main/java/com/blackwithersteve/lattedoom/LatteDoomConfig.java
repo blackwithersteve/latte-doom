@@ -37,12 +37,22 @@ public final class LatteDoomConfig {
      * here than in the software renderer. */
     public int gamma = 0;
     /** Flat light raise, 0-4 notches of 16 — the options menu's Light Boost slider. */
+    /** DOOM light units added to every sector, 0-128. */
     public int lightBoost = 0;
     /** Interface size: 0 = full status bar, 1 = simplified fullscreen numbers, 2 = none.
      * The +/- keys step it in play, source-port style. */
     public int hudSize = 0;
     /** Crosshair, the Crispy Doom feature: 0 = off, 1 = cross, 2 = health-colored. */
     public int crosshair = 0;
+    /** Crosshair size multiplier and health colouring, as UZDoom exposes them. */
+    public double crosshairScale = 1.0;
+    /** The HUD's own scale, UZDoom's hud_scalefactor. */
+    public double hudScale = 1.0;
+    /** Engine messages: shown at all, how long they stay, and how many stack. */
+    public boolean showMessages = true;
+    public double messageTime = 3.0;
+    public int messageLines = 4;
+    public boolean crosshairHealth = false;
     /** Kills/items/secrets and level time on screen, Crispy Doom's stats widget. */
     public boolean levelStats = false;
     /** Weapon bob amount, Crispy Doom's setting: 0 = full, 1 = 75%, 2 = off. */
@@ -52,6 +62,7 @@ public final class LatteDoomConfig {
     /** BSP mesh: geometry from the map's own subsectors and segs, the software
      * renderer's truth for trick maps. Experimental; takes effect at level load. */
     public boolean bspMesh = false;
+    public boolean doomLight = true;
     /** B2: right-clicking a block item against the drawn level places real MC blocks. */
     public boolean placeBlocks = true;
     /** DOOM hit points awarded per point of Minecraft attack damage on a melee swing.
@@ -128,8 +139,13 @@ public final class LatteDoomConfig {
             cfg.gamma = 0;
         }
         try {
-            cfg.lightBoost = Math.max(0, Math.min(4,
-                Integer.parseInt(props.getProperty("light-boost", "0").trim())));
+            // light-boost is DOOM light units now, 0-128. It used to be four coarse
+            // notches worth 32 units each, so a stored 1-4 is migrated up.
+            int boost = Integer.parseInt(props.getProperty("light-boost", "0").trim());
+            if (boost > 0 && boost <= 4) {
+                boost *= 32;
+            }
+            cfg.lightBoost = Math.max(0, Math.min(128, boost));
         } catch (NumberFormatException e) {
             cfg.lightBoost = 0;
         }
@@ -140,14 +156,42 @@ public final class LatteDoomConfig {
             cfg.hudSize = 0;
         }
         try {
-            cfg.crosshair = Math.max(0, Math.min(2,
+            cfg.crosshair = Math.max(0, Math.min(6,
                 Integer.parseInt(props.getProperty("crosshair", "0").trim())));
         } catch (NumberFormatException e) {
             cfg.crosshair = 0;
         }
+        try {
+            cfg.crosshairScale = Math.max(0.2, Math.min(4.0,
+                Double.parseDouble(props.getProperty("crosshair-scale", "1.0").trim())));
+        } catch (NumberFormatException e) {
+            cfg.crosshairScale = 1.0;
+        }
+        try {
+            cfg.hudScale = Math.max(0.4, Math.min(2.0,
+                Double.parseDouble(props.getProperty("hud-scale", "1.0").trim())));
+        } catch (NumberFormatException e) {
+            cfg.hudScale = 1.0;
+        }
+        cfg.showMessages = Boolean.parseBoolean(props.getProperty("show-messages", "true"));
+        try {
+            cfg.messageTime = Math.max(1.0, Math.min(10.0,
+                Double.parseDouble(props.getProperty("message-time", "3.0").trim())));
+        } catch (NumberFormatException e) {
+            cfg.messageTime = 3.0;
+        }
+        try {
+            cfg.messageLines = Math.max(1, Math.min(8,
+                Integer.parseInt(props.getProperty("message-lines", "4").trim())));
+        } catch (NumberFormatException e) {
+            cfg.messageLines = 4;
+        }
+        cfg.crosshairHealth =
+            Boolean.parseBoolean(props.getProperty("crosshair-health", "false"));
         cfg.levelStats = Boolean.parseBoolean(props.getProperty("level-stats", "false"));
         cfg.freelook = Boolean.parseBoolean(props.getProperty("freelook", "true"));
         cfg.bspMesh = Boolean.parseBoolean(props.getProperty("bsp-mesh", "false"));
+        cfg.doomLight = Boolean.parseBoolean(props.getProperty("doom-light", "true"));
         try {
             cfg.bobScale = Math.max(0, Math.min(2,
                 Integer.parseInt(props.getProperty("weapon-bob", "0").trim())));
@@ -175,10 +219,17 @@ public final class LatteDoomConfig {
         props.setProperty("light-boost", Integer.toString(cfg.lightBoost));
         props.setProperty("hud-size", Integer.toString(cfg.hudSize));
         props.setProperty("crosshair", Integer.toString(cfg.crosshair));
+        props.setProperty("crosshair-scale", Double.toString(cfg.crosshairScale));
+        props.setProperty("hud-scale", Double.toString(cfg.hudScale));
+        props.setProperty("show-messages", Boolean.toString(cfg.showMessages));
+        props.setProperty("message-time", Double.toString(cfg.messageTime));
+        props.setProperty("message-lines", Integer.toString(cfg.messageLines));
+        props.setProperty("crosshair-health", Boolean.toString(cfg.crosshairHealth));
         props.setProperty("level-stats", Boolean.toString(cfg.levelStats));
         props.setProperty("weapon-bob", Integer.toString(cfg.bobScale));
         props.setProperty("freelook", Boolean.toString(cfg.freelook));
         props.setProperty("bsp-mesh", Boolean.toString(cfg.bspMesh));
+        props.setProperty("doom-light", Boolean.toString(cfg.doomLight));
         if (props.getProperty("pwads") == null) {
             props.setProperty("pwads", "");
         }
@@ -227,10 +278,17 @@ public final class LatteDoomConfig {
         props.setProperty("light-boost", Integer.toString(lightBoost));
         props.setProperty("hud-size", Integer.toString(hudSize));
         props.setProperty("crosshair", Integer.toString(crosshair));
+        props.setProperty("crosshair-scale", Double.toString(crosshairScale));
+        props.setProperty("hud-scale", Double.toString(hudScale));
+        props.setProperty("show-messages", Boolean.toString(showMessages));
+        props.setProperty("message-time", Double.toString(messageTime));
+        props.setProperty("message-lines", Integer.toString(messageLines));
+        props.setProperty("crosshair-health", Boolean.toString(crosshairHealth));
         props.setProperty("level-stats", Boolean.toString(levelStats));
         props.setProperty("weapon-bob", Integer.toString(bobScale));
         props.setProperty("freelook", Boolean.toString(freelook));
         props.setProperty("bsp-mesh", Boolean.toString(bspMesh));
+        props.setProperty("doom-light", Boolean.toString(doomLight));
         // /pwad edits the load order at runtime — absolute paths, comma-joined,
         // same format load() parses (relative names still resolve against pwads/)
         final StringBuilder pw = new StringBuilder();

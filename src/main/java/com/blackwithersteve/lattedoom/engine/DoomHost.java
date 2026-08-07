@@ -80,7 +80,7 @@ public final class DoomHost {
     // moves the player, HOLD mirror position writes until the client visibly followed
     // (its mirror lands near the destination) — else the very next frame's mirror write
     // yanks the body back through the teleporter before the client ever saw it move
-    // (the teleport animation plays but the player never moves).
+    // ("you see the teleport animation but you don't teleport").
     private int teleSyncCount;
     private boolean telePending;
     private double teleDstX, teleDstY;
@@ -123,7 +123,6 @@ public final class DoomHost {
      * Latest world-state snapshot, published at each page flip (null while no level runs —
      * title screen, intermission). Volatile swap: readers grab a fully-built immutable copy.
      */
-    private volatile WorldSnapshot snapshot;
 
     // One reusable mouse event, exactly like the stock AWT frontend uses.
     private final event_t.mouseevent_t mouseEvent =
@@ -183,6 +182,15 @@ public final class DoomHost {
         final DoomMain<?, ?> d = doom;
         if (d != null && state == State.RUNNING) {
             d.SaveGame(slot, description);
+        }
+    }
+
+    /** Cross the exit programmatically: the engine's own G_ExitLevel, taken on its
+     * next tic (plain field writes the game tic reads — the LoadGame idiom). */
+    public void requestExitLevel() {
+        final DoomMain<?, ?> d = doom;
+        if (d != null && state == State.RUNNING) {
+            d.ExitLevel();
         }
     }
 
@@ -404,11 +412,19 @@ public final class DoomHost {
         if (d == null) {
             return;
         }
+        // Publication guards: the tic tap is a STATIC on the engine, so a dying
+        // predecessor's thread can invoke the CURRENT host's onTic (or a replaced
+        // host its own) for a beat after a reboot. Only this host's own engine
+        // thread, and only while this host is the live one, may publish.
+        if (Thread.currentThread() != engineThread || LIVE.get() != this) {
+            return;
+        }
         // A capture hiccup must never kill the tic tap (the engine loop lives through here).
         try {
             markSeenLines(d); // automap reveal — BEFORE capture so this tic's snapshot has it
         } catch (Throwable t) { noteSwallowed("site3", t);
         }
+        WorldSnapshot captured;
         try {
             final WorldSnapshot ws = WorldSnapshot.capture(d);
             if (ws != null && !remoteBodies.isEmpty()) {
@@ -433,12 +449,40 @@ public final class DoomHost {
                     ws.rbMobjId[i] = (int) ids.get(i)[2];
                 }
             }
-            snapshot = ws;
+            captured = ws;
             if (ws != null) {
                 hadLevel = true; // this engine has really been in a level (not just booting)
             }
         } catch (Throwable t) {
-            snapshot = null;
+            captured = null;
+            noteSwallowed("capture", t); // was silent, so a failing capture left no trace
+        }
+        // The engine stage, published ONLY here at a completed tic and read by the
+        // client in place of any live gamestate access. G_DoWorldDone flips
+        // gamestate to GS_LEVEL BEFORE P_SetupLevel builds the level, all inside
+        // one long engine tic — a live read in that window claims "in a level"
+        // while the snapshot is still null, which broke the client's between-levels
+        // hold and ejected the player on level finishes. Phase and snapshot now
+        // publish from the same completed tic, so that window cannot be observed.
+        // ONE write: snapshot and stage reach every reader together or not at all
+        published = new Published(captured, new PhaseSnap(kindOf(d), ++phaseTicks));
+        // The engine's own HU.Ticker consumes plr.message and NULLS it, and it runs inside
+        // Ticker() — before this tap fires. Every heads-up message was therefore already
+        // gone by the time capture() looked, which is why none ever appeared. Its display
+        // is switched off at boot so the field survives for us; we draw the HUD, and the
+        // engine's framebuffer is never shown.
+        if (d.menu != null && d.menu.getShowMessages()) {
+            d.menu.setShowMessages(false);
+        }
+        // Messages are QUEUED, not left on the snapshot. capture() read-and-clears
+        // player_t.message, so a message lives on exactly one snapshot; the client samples
+        // at 20Hz while this publishes at 35Hz, so any message that landed on a snapshot
+        // the client never sampled was simply lost. A queue cannot drop one.
+        if (captured != null && captured.message != null) {
+            pendingMessages.add(captured.message);
+            while (pendingMessages.size() > 16) {
+                pendingMessages.poll();
+            }
         }
         try {
             // the native intermission screen's data feed (only meaningful in GS_INTERMISSION,
@@ -510,11 +554,12 @@ public final class DoomHost {
             return;
         }
         applyPlayerRequests(d);
-        // STATUE-BUG DIAG: the engine advances gametic every loop, but the LEVEL ticker
-        // (P_Ticker: monster AI, movers, death states) only runs in gamestate GS_LEVEL and
-        // not while paused — leveltime is the tell. If gametic keeps climbing but leveltime
-        // is stuck, every monster idles as a "statue", hits never kill (death state can't
-        // advance) — with no engine stall. Log it (throttled) so ONE playtest names the cause.
+        // Frozen-level diagnostic. The engine advances gametic every loop, but the level
+        // ticker (P_Ticker: monster thinkers, movers, death states) only runs in gamestate
+        // GS_LEVEL and not while paused, so leveltime is the tell. If gametic keeps
+        // climbing while leveltime is stuck, every monster stands still and hits never kill
+        // because death states cannot advance, all without an engine stall. Log it,
+        // throttled, so a single playtest identifies the cause.
         if (state == State.RUNNING) {
             final int gt = d.gametic;
             if (gt - diagLastGametic >= 35) {
@@ -576,7 +621,7 @@ public final class DoomHost {
                 // instance. A fresh spawn (death restart, next level, /warp reboot) stands
                 // untouched until the client has seen it — the un-gated write clobbered
                 // every new spawn with the old standing spot run through the new anchors.
-                final WorldSnapshot ss = snapshot;
+                final WorldSnapshot ss = published.snapshot();
                 final boolean epochOk = ss != null && mir.epoch() != 0
                     && mir.epoch() == ss.levelEpoch;
                 if (mir.on() && epochOk) {
@@ -823,9 +868,12 @@ public final class DoomHost {
         if (mapRestartPending) {
             // MC death law: the player respawned after dying in the level -> vanilla SP
             // restart. On the engine thread at a frame boundary, like every engine call.
+            // Only a LIVE level restarts: honored mid-advance, this converted a
+            // completed level into an InitNew — and every InitNew is a weapon wipe.
             mapRestartPending = false;
             try {
-                if (d.gameskill != null && d.gamemap > 0) {
+                if (d.gamestate == defines.gamestate_t.GS_LEVEL
+                    && d.gameskill != null && d.gamemap > 0) {
                     d.DeferedInitNew(d.gameskill, d.gameepisode, d.gamemap);
                 }
             } catch (Throwable t) { noteSwallowed("site6", t);
@@ -1232,6 +1280,22 @@ public final class DoomHost {
         pendingUse.set(true);
     }
 
+    private final java.util.concurrent.ConcurrentLinkedQueue<String> pendingMessages =
+        new java.util.concurrent.ConcurrentLinkedQueue<>();
+
+    /** Every heads-up message since the last call, in order. Never drops one to sampling. */
+    public java.util.List<String> drainMessages() {
+        if (pendingMessages.isEmpty()) {
+            return java.util.List.of();
+        }
+        final java.util.List<String> out = new java.util.ArrayList<>();
+        String m;
+        while ((m = pendingMessages.poll()) != null) {
+            out.add(m);
+        }
+        return out;
+    }
+
     /** Upward momentum below this is ordinary physics rather than an attack throwing the
      * player. A_VileAttack gives 1000/mass, which is ten map units per tic for a player. */
     private static final int LAUNCH_MIN = 4 * 65536;
@@ -1327,27 +1391,29 @@ public final class DoomHost {
 
     /** Latest world snapshot, or null while no level is running. Safe from any thread. */
     public WorldSnapshot worldSnapshot() {
-        return snapshot;
+        return published.snapshot();
     }
+
+    /** The engine stage at a completed tic, kind on the {@link #gamestateKind()}
+     * encoding — the ONLY view of the engine's stage the client may consume. */
+    public record PhaseSnap(int kind, long tick) {}
 
     /**
-     * True when the engine is ALIVE and running but not in a playable level right now —
-     * the intermission tally after you cross an exit, the text finale, or the brief load
-     * between maps. {@link #worldSnapshot()} returns null in this window (capture only runs
-     * in GS_LEVEL) even though the engine is healthy and about to hand us the next map.
-     * Callers must NOT tear the world down here: doing so drops the player into the empty
-     * void dimension (the "statue freeze + fall through the world" on level completion).
+     * The snapshot and the stage as ONE value, published in ONE write.
+     *
+     * They used to be two volatile fields written one after the other with work in
+     * between, so a reader landing in that gap saw a new snapshot beside a stale stage. On
+     * a level exit that reads as a level standing with no snapshot, which is exactly the
+     * window the tic-boundary publication exists to close; transitionProbe caught it about
+     * one run in six. A single reference makes the pair impossible to tear.
      */
-    public boolean isBetweenLevels() {
-        final DoomMain<?, ?> d = doom;
-        return state == State.RUNNING && d != null && d.gamestate != defines.gamestate_t.GS_LEVEL;
-    }
+    private record Published(WorldSnapshot snapshot, PhaseSnap phase) { }
 
-    /** The engine's exact stage, for the DOOM-shell flow (intermission view, episode end):
-     * 0=in a level, 1=intermission tally, 2=text finale, 3=title/demo screen, -1=none/booting. */
-    public int gamestateKind() {
-        final DoomMain<?, ?> d = doom;
-        if (state != State.RUNNING || d == null || d.gamestate == null) {
+    private volatile Published published = new Published(null, null);
+    private long phaseTicks; // engine-thread only
+
+    private static int kindOf(DoomMain<?, ?> d) {
+        if (d == null || d.gamestate == null) {
             return -1;
         }
         return switch (d.gamestate) {
@@ -1357,6 +1423,30 @@ public final class DoomHost {
             case GS_DEMOSCREEN -> 3;
             default -> -1;
         };
+    }
+
+    /**
+     * True when the engine is ALIVE and running but not in a playable level right now —
+     * the intermission tally after you cross an exit, the text finale, or the brief load
+     * between maps. {@link #worldSnapshot()} returns null in this window (capture only runs
+     * in GS_LEVEL) even though the engine is healthy and about to hand us the next map.
+     * Callers must NOT tear the world down here: doing so drops the player into the empty
+     * void dimension (the "statue freeze + fall through the world" on level completion).
+     * Reads the tic-boundary publication, never the live gamestate: the live value flips
+     * to GS_LEVEL before the next level exists, and this method answering false in that
+     * window was the level-finish ejection bug.
+     */
+    public boolean isBetweenLevels() {
+        final PhaseSnap p = published.phase();
+        return state == State.RUNNING && p != null && p.kind() != 0;
+    }
+
+    /** The engine's exact stage, for the DOOM-shell flow (intermission view, episode end):
+     * 0=in a level, 1=intermission tally, 2=text finale, 3=title/demo screen, -1=none/booting.
+     * Tic-boundary publication, consistent with {@link #worldSnapshot()}. */
+    public int gamestateKind() {
+        final PhaseSnap p = published.phase();
+        return state != State.RUNNING || p == null ? -1 : p.kind();
     }
 
     /** True once this engine has published at least one in-level snapshot — distinguishes a

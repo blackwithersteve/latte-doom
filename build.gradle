@@ -93,18 +93,29 @@ tasks.register('doomSmoke', JavaExec) {
 	classpath = sourceSets.main.runtimeClasspath
 	mainClass = 'com.blackwithersteve.lattedoom.harness.HeadlessSmoke'
 	workingDir = file('run-smoke')
-	doFirst { file('run-smoke').mkdirs() }
-	args = [(project.findProperty('wad') ?: 'DOOM.WAD').toString()]
+	doFirst {
+		file('run-smoke').mkdirs()
+		if (!project.hasProperty('wad')) {
+			throw new GradleException('doomSmoke needs -Pwad=<absolute path to an IWAD>')
+		}
+	}
+	args = [(project.findProperty('wad') ?: '').toString()].findAll { !it.isEmpty() }
 }
 
 tasks.register('arenaProbe', JavaExec) {
 	group = 'verification'
-	description = 'Overworld-arena A0 proof: boot the engine on a generated arena, verify an imp lives.'
+	description = 'Boot the engine on a generated arena and verify an imp spawns and thinks.'
 	classpath = sourceSets.main.runtimeClasspath
 	mainClass = 'com.blackwithersteve.lattedoom.harness.ArenaProbe'
 	workingDir = file('run-arena')
-	doFirst { file('run-arena').mkdirs() }
+	doFirst {
+		file('run-arena').mkdirs()
+		if (!project.hasProperty('wad')) {
+			throw new GradleException('arenaProbe needs -Pwad=<absolute path to an IWAD>')
+		}
+	}
 	ignoreExitValue = true
+	args = [(project.findProperty('wad') ?: '').toString()].findAll { !it.isEmpty() }
 }
 
 // TNT MAP30 diagnostic: the red gate's USE reach and the doll-pad teleport death.
@@ -162,9 +173,108 @@ tasks.register('saveProbe', JavaExec) {
 	classpath = sourceSets.main.runtimeClasspath
 	mainClass = 'com.blackwithersteve.lattedoom.harness.SaveProbe'
 	workingDir = file('run-tnt')
-	doFirst { file('run-tnt').mkdirs() }
+	doFirst {
+		file('run-tnt').mkdirs()
+		// A gate that cannot fail is not a gate: with no wad this threw
+		// ArrayIndexOutOfBounds and ignoreExitValue reported success anyway.
+		if (!project.hasProperty('wad')) {
+			throw new GradleException('saveProbe needs -Pwad=<absolute path to an IWAD>')
+		}
+	}
 	ignoreExitValue = true
 	args = [(project.findProperty('wad') ?: '').toString()].findAll { !it.isEmpty() }
+}
+
+// Level-advance publication proof: the engine stage and the snapshot must stay consistent
+// across every level exit, or a transition reads as a level standing with no snapshot.
+tasks.register('transitionProbe', JavaExec) {
+	group = 'verification'
+	description = 'Level-advance publication proof: stage and snapshot stay consistent across exits.'
+	classpath = sourceSets.main.runtimeClasspath
+	mainClass = 'com.blackwithersteve.lattedoom.harness.TransitionProbe'
+	workingDir = file('run-tnt')
+	doFirst {
+		file('run-tnt').mkdirs()
+		if (!project.hasProperty('wad')) {
+			throw new GradleException('transitionProbe needs -Pwad=<absolute path to an IWAD>')
+		}
+	}
+	ignoreExitValue = true
+	args = [(project.findProperty('wad') ?: '').toString()].findAll { !it.isEmpty() }
+}
+
+// Asserts the session machine's delivery and advance invariants. Needs no game data:
+// Session is plain static state with no Minecraft or engine dependency.
+tasks.register('sessionProbe', JavaExec) {
+	group = 'verification'
+	description = 'Assert the session machine\'s delivery and advance invariants.'
+	classpath = sourceSets.main.runtimeClasspath
+	mainClass = 'com.blackwithersteve.lattedoom.harness.SessionProbe'
+}
+
+// Heads-up message gate: a pickup's message must reach the client, not be consumed by the
+// engine's own HUD before the port can read it.
+tasks.register('messageProbe', JavaExec) {
+	group = 'verification'
+	description = 'Assert engine heads-up messages reach the client.'
+	classpath = sourceSets.main.runtimeClasspath
+	mainClass = 'com.blackwithersteve.lattedoom.harness.MessageProbe'
+	workingDir = file('run-smoke')
+	doFirst {
+		file('run-smoke').mkdirs()
+		if (!project.hasProperty('wad')) {
+			throw new GradleException('messageProbe needs -Pwad=<absolute path to an IWAD>')
+		}
+	}
+	ignoreExitValue = true
+	args = [(project.findProperty('wad') ?: '').toString()].findAll { !it.isEmpty() }
+}
+
+// Reports each HUD font's colour ceiling. A blit tint is a multiply, so it can darken a
+// channel but never add one: this decides which fonts a tint can recolour at all.
+tasks.register('fontProbe', JavaExec) {
+	group = 'verification'
+	description = 'Report each HUD font\'s colour ceiling, deciding what a tint can recolour.'
+	classpath = sourceSets.main.runtimeClasspath
+	mainClass = 'com.blackwithersteve.lattedoom.harness.FontProbe'
+	doFirst {
+		if (!project.hasProperty('wad')) {
+			throw new GradleException('fontProbe needs -Pwad=<absolute path to an IWAD>')
+		}
+	}
+	args = [(project.findProperty('wad') ?: '').toString()].findAll { !it.isEmpty() }
+}
+
+// FF_FULLBRIGHT end to end: the bright bit on an explosion must survive into the snapshot.
+tasks.register('brightProbe', JavaExec) {
+	group = 'verification'
+	description = 'FF_FULLBRIGHT end to end: barrel explosion bright bit, engine against snapshot.'
+	classpath = sourceSets.main.runtimeClasspath
+	mainClass = 'com.blackwithersteve.lattedoom.harness.BrightProbe'
+	workingDir = file('run-tnt')
+	doFirst {
+		file('run-tnt').mkdirs()
+		if (!project.hasProperty('wad')) {
+			throw new GradleException('brightProbe needs -Pwad=<absolute path to an IWAD>')
+		}
+	}
+	ignoreExitValue = true
+	args = [(project.findProperty('wad') ?: '').toString()].findAll { !it.isEmpty() }
+}
+
+// Coplanar flat overlaps between same-height sectors, which the BSP mesh can produce.
+tasks.register('overlapProbe', JavaExec) {
+	group = 'verification'
+	description = 'Report coplanar flat overlaps between same-height sectors.'
+	classpath = sourceSets.main.runtimeClasspath
+	mainClass = 'com.blackwithersteve.lattedoom.harness.OverlapProbe'
+	doFirst {
+		if (!project.hasProperty('wad')) {
+			throw new GradleException('overlapProbe needs -Pwad=<absolute path to an IWAD>')
+		}
+	}
+	args = [(project.findProperty('wad') ?: '').toString(),
+	        (project.findProperty('map') ?: '').toString()].findAll { !it.isEmpty() }
 }
 
 // Prints the seamless loader's classification of every file in a wads folder.
@@ -179,8 +289,13 @@ tasks.register('wadProbe', JavaExec) {
 // Parses+applies DEHACKED/BEX from a wad or .deh file against the real tables, no engine boot.
 tasks.register('dehProbe', JavaExec) {
 	group = 'verification'
-	description = 'DEHACKED/BEX parser proof: parse+apply a wad\'s DEHACKED lumps (default: Eviternity).'
+	description = 'DEHACKED/BEX parser proof: parse and apply a file\'s DEHACKED lumps.'
 	classpath = sourceSets.main.runtimeClasspath
 	mainClass = 'com.blackwithersteve.lattedoom.harness.DehProbe'
+	doFirst {
+		if (!project.hasProperty('dehFile')) {
+			throw new GradleException('dehProbe needs -PdehFile=<path to a .deh, .bex or .wad>')
+		}
+	}
 	args = [(project.findProperty('dehFile') ?: '').toString()].findAll { !it.isEmpty() }
 }

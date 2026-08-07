@@ -14,12 +14,13 @@ import java.util.HashSet;
 import java.util.Set;
 
 /**
- * THE OTHER HALF of the combat translation: Minecraft attacks become damage the ENGINE
- * understands. A plain Steve's fist/sword swing and any flying arrow are tested against
- * the snapshot's shootable mobjs; hits ship to the level owner's engine (DoomHitC2S)
- * where P_DamageMobj runs with the attacker's possessed body as the source — demons
- * fight back at whoever hit them, barrels explode, dice are the engine's own.
- * Scale: MC damage x5 = DOOM hit points (the inverse of the hearts law).
+ * The other half of the combat translation: Minecraft attacks become damage the engine
+ * understands. An untransformed player's fist or sword swing and any flying arrow are
+ * tested against the snapshot's shootable mobjs; hits ship to the level owner's engine
+ * (DoomHitC2S) where P_DamageMobj runs with the attacker's possessed body as the source,
+ * so demons fight back at whoever hit them, barrels explode, and the dice are the
+ * engine's own. Scale: Minecraft damage x5 = DOOM hit points, the inverse of the hearts
+ * law.
  */
 public final class MinecraftCombat {
 
@@ -27,12 +28,12 @@ public final class MinecraftCombat {
     private static final Set<Integer> arrowsSpent = new HashSet<>();
 
     /**
-     * DOOM hit points per point of Minecraft ATTACK_DAMAGE for a melee swing vs demons
-     * (melee is tuned to hit HARD, tiered by weapon). The plain ÷5-hearts
-     * inverse would be 5.0; this bumps it so the iron sword is a real demon-killer, and
-     * because ATTACK_DAMAGE already encodes weapon tier, everything scales from there:
-     *   wood/gold 4→48 · stone 5→60 · IRON 6→72 (one-shots an imp) · diamond 7→84 ·
-     *   netherite 8→96 · axes higher still. Reference: iron at 72.
+     * DOOM hit points per point of Minecraft ATTACK_DAMAGE for a melee swing against
+     * demons. The plain inverse of the hearts law would be 5.0; this is deliberately
+     * higher so melee is tiered by weapon and worth using. ATTACK_DAMAGE already encodes
+     * the tier, so everything scales from it: wood and gold 4 to 48, stone 5 to 60, iron
+     * 6 to 72 (which one-shots an imp), diamond 7 to 84, netherite 8 to 96, and axes
+     * higher still. Iron at 72 is the reference point.
      */
     private static final double MELEE_DOOM_SCALE_DEFAULT = 18.0;
 

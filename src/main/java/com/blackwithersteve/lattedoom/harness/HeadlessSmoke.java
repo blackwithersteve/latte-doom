@@ -10,17 +10,20 @@ import java.nio.file.Path;
 import java.util.List;
 
 /**
- * Boots the real DOOM engine WITHOUT Minecraft and dumps title/demo frames as
- * PNGs, proving the embedded bridge works end to end: WAD loading, the indexed
- * renderer, frame publishing and input injection (ESC opens the menu mid-demo).
+ * Boots the real DOOM engine without Minecraft and dumps title and demo frames as PNGs.
+ * Covers the embedded bridge end to end: WAD loading, the indexed renderer, frame
+ * publishing and input injection (ESC opens the menu mid-demo).
  *
- * Run with: gradlew doomSmoke
+ * Run: gradlew doomSmoke -Pwad=&lt;absolute path to an IWAD&gt;
  */
 public final class HeadlessSmoke {
 
     public static void main(String[] args) throws Exception {
-        final Path iwad = Path.of(args.length > 0 ? args[0]
-            : "DOOM.WAD");
+        if (args.length < 1) {
+            System.err.println("HeadlessSmoke: pass an IWAD path (-Pwad=<path>)");
+            System.exit(2);
+        }
+        final Path iwad = Path.of(args[0]);
         final Path frames = Path.of("frames");
         Files.createDirectories(frames);
 

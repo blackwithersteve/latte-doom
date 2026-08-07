@@ -25,7 +25,7 @@ import p.ActiveStates;
 import w.lumpinfo_t;
 
 /**
- * Latte Doom additive patch — DEHACKED/BEX applier (M-BOOM slice 7).
+ * Latte Doom additive patch — DEHACKED/BEX applier.
  *
  * Entry point is {@link #applyWadDehLumps}: called once at engine boot, after
  * W_Init loaded the wad set and before any table consumer runs (R_Init, P_Init,
