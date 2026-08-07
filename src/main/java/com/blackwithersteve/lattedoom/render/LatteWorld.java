@@ -708,10 +708,24 @@ public final class LatteWorld {
             hotbarWasDown[i] = down;
         }
         final int slot = mc.player.getInventory().getSelectedSlot();
-        if (want < 0 && slot != lastSlot && slot >= 0 && slot < 7) {
-            want = slot; // scroll wheel, or a slot the player moved to
+        boolean scrolled = false;
+        if (want < 0 && slot != lastSlot) {
+            // The wheel moves one hotbar slot at a time, but most slots hold nothing the
+            // player owns. Landing on an empty one used to spend the scroll and do nothing,
+            // so reaching the chainsaw from the shotgun took five clicks. Carry on in the
+            // direction of travel to the next slot that is actually armed.
+            final int found = nextArmedSlot(s, slot, scrollDir(lastSlot, slot));
+            if (found < 0) {
+                lastSlot = slot;
+                return;
+            }
+            if (found != slot) {
+                mc.player.getInventory().setSelectedSlot(found);
+            }
+            want = found;
+            scrolled = true;
         }
-        lastSlot = slot;
+        lastSlot = scrolled ? want : slot;
         if (want < 0) {
             return;
         }
@@ -742,6 +756,36 @@ public final class LatteWorld {
             return;
         }
         host.selectWeapon(weaponName(chosen));
+    }
+
+    /**
+     * Which way the wheel turned, from the hotbar slot it left and the one it reached.
+     * The hotbar wraps, so slot 9 to slot 1 is forwards and slot 1 to slot 9 is backwards.
+     */
+    private static int scrollDir(int from, int to) {
+        return Math.floorMod(to - from, 9) <= 4 ? 1 : -1;
+    }
+
+    /**
+     * The first hotbar slot at or after {@code from}, travelling in {@code dir}, holding a
+     * weapon the player owns and this game has. Slots 8 and 9 carry no weapon and are
+     * stepped over. Returns -1 only if the player owns nothing at all, which cannot happen
+     * in a live game because the fist is always owned.
+     */
+    private static int nextArmedSlot(WorldSnapshot s, int from, int dir) {
+        for (int step = 0; step < 9; step++) {
+            final int idx = Math.floorMod(from + dir * step, 9);
+            if (idx >= SLOT_WEAPONS.length) {
+                continue;
+            }
+            for (String name : SLOT_WEAPONS[idx]) {
+                final int id = weaponId(name);
+                if (owns(s, id) && available(id)) {
+                    return idx;
+                }
+            }
+        }
+        return -1;
     }
 
     /**

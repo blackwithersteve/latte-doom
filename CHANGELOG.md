@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.61.0-alpha] - 2026-08-07
+
+### Fixed
+
+- Scrolling the weapon wheel stopped on hotbar slots holding no weapon you own, so
+  reaching the chainsaw from the shotgun could take five scrolls. The wheel now carries
+  on to the next slot that is actually armed.
+
 ## [0.60.0-alpha] - 2026-08-07
 
 ### Added
